@@ -71,26 +71,6 @@ impl HandshakeType {
     }
 }
 
-// Minimal RNG for PSK binder computation (only used when PSK is present)
-#[allow(dead_code)]
-struct DummyRng;
-impl rand_core::RngCore for DummyRng {
-    fn next_u32(&mut self) -> u32 {
-        0
-    }
-    fn next_u64(&mut self) -> u64 {
-        0
-    }
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        dest.fill(0);
-    }
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-        dest.fill(0);
-        Ok(())
-    }
-}
-impl rand_core::CryptoRng for DummyRng {}
-
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ClientHandshake<'config, 'a, Provider>
