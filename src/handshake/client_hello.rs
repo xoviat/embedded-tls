@@ -1,14 +1,13 @@
 use core::marker::PhantomData;
 
-use digest::{Digest, OutputSizeUser};
+use digest::OutputSizeUser;
 use heapless::Vec;
-use p256::EncodedPoint;
-use p256::ecdh::EphemeralSecret;
 use p256::elliptic_curve::rand_core::RngCore;
 use typenum::Unsigned;
 
-use crate::TlsError;
+use crate::buffer::CryptoBuffer;
 use crate::config::{TlsCipherSuite, TlsConfig};
+use crate::crypto_traits::TlsHash;
 use crate::extensions::extension_data::alpn::AlpnProtocolNameList;
 use crate::extensions::extension_data::key_share::{KeyShareClientHello, KeyShareEntry};
 use crate::extensions::extension_data::pre_shared_key::PreSharedKeyClientHello;
@@ -22,8 +21,9 @@ use crate::extensions::extension_data::supported_versions::{SupportedVersionsCli
 use crate::extensions::messages::ClientHelloExtension;
 use crate::handshake::{LEGACY_VERSION, Random};
 use crate::key_schedule::{HashOutputSize, WriteKeySchedule};
-use crate::{CryptoProvider, buffer::CryptoBuffer};
+use crate::{CryptoProvider, TlsError};
 
+#[derive(Debug)]
 pub struct ClientHello<'config, CipherSuite>
 where
     CipherSuite: TlsCipherSuite,
@@ -31,7 +31,8 @@ where
     pub(crate) config: &'config TlsConfig<'config>,
     random: Random,
     cipher_suite: PhantomData<CipherSuite>,
-    pub(crate) secret: EphemeralSecret,
+    pub(crate) secret_key: [u8; 32],
+    pub(crate) public_key: [u8; 64],
 }
 
 impl<'config, CipherSuite> ClientHello<'config, CipherSuite>
@@ -45,17 +46,26 @@ where
         let mut random = [0; 32];
         provider.rng().fill_bytes(&mut random);
 
+        let mut secret_key = [0u8; 32];
+        provider.rng().fill_bytes(&mut secret_key);
+        let mut public_key = [0u8; 64];
+        provider
+            .keygen(NamedGroup::Secp256r1, &secret_key, &mut public_key)
+            .expect("keygen failed");
+
         Self {
             config,
             random,
             cipher_suite: PhantomData,
-            secret: EphemeralSecret::random(&mut provider.rng()),
+            secret_key,
+            public_key,
         }
     }
 
     pub(crate) fn encode(&self, buf: &mut CryptoBuffer<'_>) -> Result<(), TlsError> {
-        let public_key = EncodedPoint::from(&self.secret.public_key());
-        let public_key = public_key.as_ref();
+        let mut sec1_public = [0u8; 65];
+        sec1_public[0] = 0x04;
+        sec1_public[1..].copy_from_slice(&self.public_key);
 
         buf.push_u16(LEGACY_VERSION)
             .map_err(|_| TlsError::EncodeError)?;
@@ -111,7 +121,7 @@ where
             ClientHelloExtension::KeyShare(KeyShareClientHello {
                 client_shares: Vec::from_slice(&[KeyShareEntry {
                     group: NamedGroup::Secp256r1,
-                    opaque: public_key,
+                    opaque: &sec1_public,
                 }])
                 .unwrap(),
             })
@@ -148,12 +158,17 @@ where
         Ok(())
     }
 
-    pub fn finalize(
+    #[allow(dead_code)]
+    pub fn finalize<Provider>(
         &self,
         enc_buf: &mut [u8],
-        transcript: &mut CipherSuite::Hash,
-        write_key_schedule: &mut WriteKeySchedule<CipherSuite>,
-    ) -> Result<(), TlsError> {
+        transcript: &mut Provider::Hash,
+        write_key_schedule: &mut WriteKeySchedule<Provider>,
+        provider: &mut Provider,
+    ) -> Result<(), TlsError>
+    where
+        Provider: CryptoProvider<CipherSuite = CipherSuite>,
+    {
         // Special case for PSK which needs to:
         //
         // 1. Add the client hello without the binders to the transcript
@@ -174,7 +189,7 @@ where
             let mut buf = CryptoBuffer::wrap(&mut enc_buf[binders_pos..]);
             // Create a binder and encode for each identity
             for _id in identities {
-                let binder = write_key_schedule.create_psk_binder(transcript)?;
+                let binder = write_key_schedule.create_psk_binder(transcript, provider)?;
                 binder.encode(&mut buf)?;
             }
 

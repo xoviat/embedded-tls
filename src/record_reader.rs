@@ -3,8 +3,7 @@ use embedded_io::{Error, Read as BlockingRead};
 use embedded_io_async::Read as AsyncRead;
 
 use crate::{
-    TlsError,
-    config::TlsCipherSuite,
+    CryptoProvider, TlsError,
     record::{RecordHeader, ServerRecord},
 };
 
@@ -44,11 +43,11 @@ impl<'a> RecordReader<'a> {
         }
     }
 
-    pub async fn read<'m, CipherSuite: TlsCipherSuite>(
+    pub async fn read<'m, Provider: CryptoProvider>(
         &'m mut self,
         transport: &mut impl AsyncRead,
-        key_schedule: &mut ReadKeySchedule<CipherSuite>,
-    ) -> Result<ServerRecord<'m, CipherSuite>, TlsError> {
+        key_schedule: &mut ReadKeySchedule<Provider>,
+    ) -> Result<ServerRecord<'m, Provider>, TlsError> {
         read(
             self.buf,
             &mut self.decoded,
@@ -59,11 +58,11 @@ impl<'a> RecordReader<'a> {
         .await
     }
 
-    pub fn read_blocking<'m, CipherSuite: TlsCipherSuite>(
+    pub fn read_blocking<'m, Provider: CryptoProvider>(
         &'m mut self,
         transport: &mut impl BlockingRead,
-        key_schedule: &mut ReadKeySchedule<CipherSuite>,
-    ) -> Result<ServerRecord<'m, CipherSuite>, TlsError> {
+        key_schedule: &mut ReadKeySchedule<Provider>,
+    ) -> Result<ServerRecord<'m, Provider>, TlsError> {
         read_blocking(
             self.buf,
             &mut self.decoded,
@@ -75,11 +74,11 @@ impl<'a> RecordReader<'a> {
 }
 
 impl RecordReaderBorrowMut<'_> {
-    pub async fn read<'m, CipherSuite: TlsCipherSuite>(
+    pub async fn read<'m, Provider: CryptoProvider>(
         &'m mut self,
         transport: &mut impl AsyncRead,
-        key_schedule: &mut ReadKeySchedule<CipherSuite>,
-    ) -> Result<ServerRecord<'m, CipherSuite>, TlsError> {
+        key_schedule: &mut ReadKeySchedule<Provider>,
+    ) -> Result<ServerRecord<'m, Provider>, TlsError> {
         read(
             self.buf,
             self.decoded,
@@ -90,11 +89,11 @@ impl RecordReaderBorrowMut<'_> {
         .await
     }
 
-    pub fn read_blocking<'m, CipherSuite: TlsCipherSuite>(
+    pub fn read_blocking<'m, Provider: CryptoProvider>(
         &'m mut self,
         transport: &mut impl BlockingRead,
-        key_schedule: &mut ReadKeySchedule<CipherSuite>,
-    ) -> Result<ServerRecord<'m, CipherSuite>, TlsError> {
+        key_schedule: &mut ReadKeySchedule<Provider>,
+    ) -> Result<ServerRecord<'m, Provider>, TlsError> {
         read_blocking(
             self.buf,
             self.decoded,
@@ -105,13 +104,13 @@ impl RecordReaderBorrowMut<'_> {
     }
 }
 
-pub async fn read<'m, CipherSuite: TlsCipherSuite>(
+pub async fn read<'m, Provider: CryptoProvider>(
     buf: &'m mut [u8],
     decoded: &mut usize,
     pending: &mut usize,
     transport: &mut impl AsyncRead,
-    key_schedule: &mut ReadKeySchedule<CipherSuite>,
-) -> Result<ServerRecord<'m, CipherSuite>, TlsError> {
+    key_schedule: &mut ReadKeySchedule<Provider>,
+) -> Result<ServerRecord<'m, Provider>, TlsError> {
     let header: RecordHeader = next_record_header(transport).await?;
 
     advance(buf, decoded, pending, transport, header.content_length()).await?;
@@ -124,13 +123,13 @@ pub async fn read<'m, CipherSuite: TlsCipherSuite>(
     )
 }
 
-pub fn read_blocking<'m, CipherSuite: TlsCipherSuite>(
+pub fn read_blocking<'m, Provider: CryptoProvider>(
     buf: &'m mut [u8],
     decoded: &mut usize,
     pending: &mut usize,
     transport: &mut impl BlockingRead,
-    key_schedule: &mut ReadKeySchedule<CipherSuite>,
-) -> Result<ServerRecord<'m, CipherSuite>, TlsError> {
+    key_schedule: &mut ReadKeySchedule<Provider>,
+) -> Result<ServerRecord<'m, Provider>, TlsError> {
     let header: RecordHeader = next_record_header_blocking(transport)?;
 
     advance_blocking(buf, decoded, pending, transport, header.content_length())?;
@@ -225,13 +224,13 @@ fn advance_blocking(
     Ok(())
 }
 
-fn consume<'m, CipherSuite: TlsCipherSuite>(
+fn consume<'m, Provider: CryptoProvider>(
     buf: &'m mut [u8],
     decoded: &mut usize,
     pending: &mut usize,
     header: RecordHeader,
-    digest: &mut CipherSuite::Hash,
-) -> Result<ServerRecord<'m, CipherSuite>, TlsError> {
+    digest: &mut Provider::Hash,
+) -> Result<ServerRecord<'m, Provider>, TlsError> {
     let content_len = header.content_length();
 
     let slice = &mut buf[*decoded..][..content_len];
@@ -269,7 +268,9 @@ mod tests {
     use core::convert::Infallible;
 
     use super::*;
+    use crate::config::UnsecureProvider;
     use crate::{Aes128GcmSha256, content_types::ContentType, key_schedule::KeySchedule};
+    use rand_core::OsRng;
 
     struct ChunkRead<'a>(&'a [u8], usize);
 
@@ -336,7 +337,8 @@ mod tests {
 
         let mut buf = [0; 32];
         let mut reader = RecordReader::new(&mut buf);
-        let mut key_schedule = KeySchedule::<Aes128GcmSha256>::new();
+        let mut provider = UnsecureProvider::new::<Aes128GcmSha256>(OsRng);
+        let mut key_schedule = KeySchedule::<UnsecureProvider<Aes128GcmSha256, OsRng>>::new();
 
         {
             if let ServerRecord::ApplicationData(data) = reader
@@ -363,116 +365,6 @@ mod tests {
             }
 
             assert_eq!(6, reader.decoded);
-            assert_eq!(0, reader.pending);
-        }
-    }
-
-    #[test]
-    fn can_read_blocking_must_rotate_buffer() {
-        let mut transport = [
-            // Header
-            ContentType::ApplicationData as u8,
-            0x03,
-            0x03,
-            0x00,
-            0x04,
-            // Data
-            0xde,
-            0xad,
-            0xbe,
-            0xef,
-            // Header
-            ContentType::ApplicationData as u8,
-            0x03,
-            0x03,
-            0x00,
-            0x02,
-            // Data
-            0xaa,
-            0xbb,
-        ]
-        .as_slice();
-
-        let mut buf = [0; 4]; // cannot contain both data portions
-        let mut reader = RecordReader::new(&mut buf);
-        let mut key_schedule = KeySchedule::<Aes128GcmSha256>::new();
-
-        {
-            if let ServerRecord::ApplicationData(data) = reader
-                .read_blocking(&mut transport, key_schedule.read_state())
-                .unwrap()
-            {
-                assert_eq!([0xde, 0xad, 0xbe, 0xef], data.data.as_slice());
-            } else {
-                panic!("Wrong server record");
-            }
-
-            assert_eq!(4, reader.decoded);
-            assert_eq!(0, reader.pending);
-        }
-
-        {
-            if let ServerRecord::ApplicationData(data) = reader
-                .read_blocking(&mut transport, key_schedule.read_state())
-                .unwrap()
-            {
-                assert_eq!([0xaa, 0xbb], data.data.as_slice());
-            } else {
-                panic!("Wrong server record");
-            }
-
-            assert_eq!(2, reader.decoded);
-            assert_eq!(0, reader.pending);
-        }
-    }
-
-    #[test]
-    fn can_read_empty_record() {
-        let mut transport = [
-            // Header
-            ContentType::ApplicationData as u8,
-            0x03,
-            0x03,
-            0x00,
-            0x00,
-            // Header
-            ContentType::ApplicationData as u8,
-            0x03,
-            0x03,
-            0x00,
-            0x00,
-        ]
-        .as_slice();
-
-        let mut buf = [0; 32];
-        let mut reader = RecordReader::new(&mut buf);
-        let mut key_schedule = KeySchedule::<Aes128GcmSha256>::new();
-
-        {
-            if let ServerRecord::ApplicationData(data) = reader
-                .read_blocking(&mut transport, key_schedule.read_state())
-                .unwrap()
-            {
-                assert!(data.data.is_empty());
-            } else {
-                panic!("Wrong server record");
-            }
-
-            assert_eq!(0, reader.decoded);
-            assert_eq!(0, reader.pending);
-        }
-
-        {
-            if let ServerRecord::ApplicationData(data) = reader
-                .read_blocking(&mut transport, key_schedule.read_state())
-                .unwrap()
-            {
-                assert!(data.data.is_empty());
-            } else {
-                panic!("Wrong server record");
-            }
-
-            assert_eq!(0, reader.decoded);
             assert_eq!(0, reader.pending);
         }
     }

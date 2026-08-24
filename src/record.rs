@@ -1,7 +1,7 @@
 use crate::TlsError;
 use crate::application_data::ApplicationData;
 use crate::change_cipher_spec::ChangeCipherSpec;
-use crate::config::{TlsCipherSuite, TlsConfig};
+use crate::config::TlsConfig;
 use crate::content_types::ContentType;
 use crate::handshake::client_hello::ClientHello;
 use crate::handshake::{ClientHandshake, ServerHandshake};
@@ -16,12 +16,11 @@ use core::fmt::Debug;
 pub type Encrypted = bool;
 
 #[allow(clippy::large_enum_variant)]
-pub enum ClientRecord<'config, 'a, CipherSuite>
+pub enum ClientRecord<'config, 'a, Provider>
 where
-    // N: ArrayLength<u8>,
-    CipherSuite: TlsCipherSuite,
+    Provider: CryptoProvider,
 {
-    Handshake(ClientHandshake<'config, 'a, CipherSuite>, Encrypted),
+    Handshake(ClientHandshake<'config, 'a, Provider>, Encrypted),
     Alert(Alert, Encrypted),
 }
 
@@ -78,10 +77,9 @@ impl ClientRecordHeader {
     }
 }
 
-impl<'config, CipherSuite> ClientRecord<'config, '_, CipherSuite>
+impl<'config, Provider> ClientRecord<'config, '_, Provider>
 where
-    //N: ArrayLength<u8>,
-    CipherSuite: TlsCipherSuite,
+    Provider: CryptoProvider,
 {
     pub fn header(&self) -> ClientRecordHeader {
         match self {
@@ -90,12 +88,9 @@ where
         }
     }
 
-    pub fn client_hello<Provider>(
-        config: &'config TlsConfig<'config>,
-        provider: &mut Provider,
-    ) -> Self
+    pub fn client_hello<Prov>(config: &'config TlsConfig<'config>, provider: &mut Prov) -> Self
     where
-        Provider: CryptoProvider,
+        Prov: CryptoProvider,
     {
         ClientRecord::Handshake(
             ClientHandshake::ClientHello(ClientHello::new(config, provider)),
@@ -124,15 +119,16 @@ where
     pub fn finish_record(
         &self,
         buf: &mut CryptoBuffer,
-        transcript: &mut CipherSuite::Hash,
-        write_key_schedule: &mut WriteKeySchedule<CipherSuite>,
+        transcript: &mut Provider::Hash,
+        write_key_schedule: &mut WriteKeySchedule<Provider>,
+        provider: Option<&mut Provider>,
     ) -> Result<(), TlsError> {
         match self {
             ClientRecord::Handshake(handshake, false) => {
-                handshake.finalize(buf, transcript, write_key_schedule)
+                handshake.finalize(buf, transcript, write_key_schedule, provider)
             }
             ClientRecord::Handshake(_, true) => {
-                ClientHandshake::<CipherSuite>::finalize_encrypted(buf, transcript);
+                ClientHandshake::<Provider>::finalize_encrypted(buf, transcript);
                 Ok(())
             }
             _ => Ok(()),
@@ -143,8 +139,8 @@ where
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(clippy::large_enum_variant)]
-pub enum ServerRecord<'a, CipherSuite: TlsCipherSuite> {
-    Handshake(ServerHandshake<'a, CipherSuite>),
+pub enum ServerRecord<'a, Provider: CryptoProvider> {
+    Handshake(ServerHandshake<'a, Provider>),
     ChangeCipherSpec(ChangeCipherSpec),
     Alert(Alert),
     ApplicationData(ApplicationData<'a>),
@@ -179,7 +175,7 @@ impl RecordHeader {
     }
 }
 
-impl<'a, CipherSuite: TlsCipherSuite> ServerRecord<'a, CipherSuite> {
+impl<'a, Provider: CryptoProvider> ServerRecord<'a, Provider> {
     pub fn content_type(&self) -> ContentType {
         match self {
             ServerRecord::Handshake(_) => ContentType::Handshake,
@@ -192,8 +188,8 @@ impl<'a, CipherSuite: TlsCipherSuite> ServerRecord<'a, CipherSuite> {
     pub fn decode(
         header: RecordHeader,
         data: &'a mut [u8],
-        digest: &mut CipherSuite::Hash,
-    ) -> Result<ServerRecord<'a, CipherSuite>, TlsError> {
+        digest: &mut Provider::Hash,
+    ) -> Result<ServerRecord<'a, Provider>, TlsError> {
         assert_eq!(header.content_length(), data.len());
         match header.content_type() {
             ContentType::Invalid => Err(TlsError::Unimplemented),
@@ -219,6 +215,4 @@ impl<'a, CipherSuite: TlsCipherSuite> ServerRecord<'a, CipherSuite> {
             }
         }
     }
-
-    //pub fn parse<D: Digest>(buf: &[u8]) -> Result<Self, TlsError> {}
 }

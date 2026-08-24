@@ -1,19 +1,21 @@
 //use p256::elliptic_curve::AffinePoint;
+use crate::CertificateVerify;
 use crate::TlsError;
-use crate::config::TlsCipherSuite;
+use crate::config::Certificate;
+use crate::crypto_traits::TlsHash;
+use crate::extensions::extension_data::signature_algorithms::SignatureScheme;
 use crate::handshake::certificate::CertificateRef;
 use crate::handshake::certificate_request::CertificateRequestRef;
-use crate::handshake::certificate_verify::{CertificateVerify, CertificateVerifyRef};
+use crate::handshake::certificate_verify::CertificateVerifyRef;
 use crate::handshake::client_hello::ClientHello;
 use crate::handshake::encrypted_extensions::EncryptedExtensions;
 use crate::handshake::finished::Finished;
 use crate::handshake::new_session_ticket::NewSessionTicket;
 use crate::handshake::server_hello::ServerHello;
-use crate::key_schedule::HashOutputSize;
+use crate::key_schedule::ProviderHashOutputSize;
 use crate::parse_buffer::{ParseBuffer, ParseError};
-use crate::{buffer::CryptoBuffer, key_schedule::WriteKeySchedule};
+use crate::{CryptoProvider, buffer::CryptoBuffer, key_schedule::WriteKeySchedule};
 use core::fmt::{Debug, Formatter};
-use sha2::Digest;
 
 pub mod binder;
 pub mod certificate;
@@ -62,97 +64,120 @@ impl HandshakeType {
             _ => Err(ParseError::InvalidData),
         }
     }
+
+    #[allow(dead_code)]
+    pub fn encode(self, buf: &mut CryptoBuffer) -> Result<(), TlsError> {
+        buf.push(self as u8).map_err(|_| TlsError::EncodeError)
+    }
 }
 
-#[allow(clippy::large_enum_variant)]
-pub enum ClientHandshake<'config, 'a, CipherSuite>
+// Minimal RNG for PSK binder computation (only used when PSK is present)
+#[allow(dead_code)]
+struct DummyRng;
+impl rand_core::RngCore for DummyRng {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        dest.fill(0);
+    }
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
+        dest.fill(0);
+        Ok(())
+    }
+}
+impl rand_core::CryptoRng for DummyRng {}
+
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ClientHandshake<'config, 'a, Provider>
 where
-    CipherSuite: TlsCipherSuite,
+    Provider: CryptoProvider,
 {
-    ClientCert(CertificateRef<'a>),
-    ClientCertVerify(CertificateVerify),
-    ClientHello(ClientHello<'config, CipherSuite>),
-    Finished(Finished<HashOutputSize<CipherSuite>>),
+    ClientHello(ClientHello<'config, Provider::CipherSuite>),
+    ClientCertificate(CertificateRef<'a>),
+    ClientCertificateVerify(CertificateVerify),
+    Finished(Finished<ProviderHashOutputSize<Provider>>),
 }
 
-impl<CipherSuite> ClientHandshake<'_, '_, CipherSuite>
+impl<Provider> ClientHandshake<'_, '_, Provider>
 where
-    CipherSuite: TlsCipherSuite,
+    Provider: CryptoProvider,
 {
-    fn handshake_type(&self) -> HandshakeType {
+    #[allow(dead_code)]
+    #[allow(dead_code)]
+    pub fn handshake_type(&self) -> HandshakeType {
         match self {
             ClientHandshake::ClientHello(_) => HandshakeType::ClientHello,
             ClientHandshake::Finished(_) => HandshakeType::Finished,
-            ClientHandshake::ClientCert(_) => HandshakeType::Certificate,
-            ClientHandshake::ClientCertVerify(_) => HandshakeType::CertificateVerify,
+            ClientHandshake::ClientCertificate(_) => HandshakeType::Certificate,
+            ClientHandshake::ClientCertificateVerify(_) => HandshakeType::CertificateVerify,
         }
     }
 
-    fn encode_inner(&self, buf: &mut CryptoBuffer<'_>) -> Result<(), TlsError> {
+    pub fn encode(&self, buf: &mut CryptoBuffer) -> Result<(), TlsError> {
         match self {
             ClientHandshake::ClientHello(inner) => inner.encode(buf),
             ClientHandshake::Finished(inner) => inner.encode(buf),
-            ClientHandshake::ClientCert(inner) => inner.encode(buf),
-            ClientHandshake::ClientCertVerify(inner) => inner.encode(buf),
+            ClientHandshake::ClientCertificate(inner) => inner.encode(buf),
+            ClientHandshake::ClientCertificateVerify(inner) => inner.encode(buf),
         }
-    }
-
-    pub(crate) fn encode(&self, buf: &mut CryptoBuffer<'_>) -> Result<(), TlsError> {
-        buf.push(self.handshake_type() as u8)
-            .map_err(|_| TlsError::EncodeError)?;
-
-        buf.with_u24_length(|buf| self.encode_inner(buf))
     }
 
     pub fn finalize(
         &self,
         buf: &mut CryptoBuffer,
-        transcript: &mut CipherSuite::Hash,
-        write_key_schedule: &mut WriteKeySchedule<CipherSuite>,
+        transcript: &mut Provider::Hash,
+        write_key_schedule: &mut WriteKeySchedule<Provider>,
+        provider: Option<&mut Provider>,
     ) -> Result<(), TlsError> {
-        let enc_buf = buf.as_mut_slice();
-        if let ClientHandshake::ClientHello(hello) = self {
-            hello.finalize(enc_buf, transcript, write_key_schedule)
-        } else {
-            transcript.update(enc_buf);
-            Ok(())
+        if let ClientHandshake::ClientHello(_hello) = self {
+            let psk_binder = write_key_schedule
+                .create_psk_binder(transcript, provider.ok_or(TlsError::InternalError)?)
+                .map_err(|_| TlsError::InvalidHandshake)?;
+            psk_binder.encode(buf)?;
         }
+        Ok(())
     }
 
-    pub fn finalize_encrypted(buf: &mut CryptoBuffer, transcript: &mut CipherSuite::Hash) {
-        let enc_buf = buf.as_slice();
-        let end = enc_buf.len();
-        transcript.update(&enc_buf[0..end]);
+    pub fn finalize_encrypted(buf: &mut CryptoBuffer, transcript: &mut Provider::Hash) {
+        let mut transcript_clone = transcript.clone();
+        transcript_clone.update(buf.as_slice());
+        *transcript = transcript_clone;
     }
 }
 
-#[allow(clippy::large_enum_variant)]
-pub enum ServerHandshake<'a, CipherSuite: TlsCipherSuite> {
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ServerHandshake<'a, Provider: CryptoProvider> {
     ServerHello(ServerHello<'a>),
     EncryptedExtensions(EncryptedExtensions<'a>),
-    NewSessionTicket(NewSessionTicket<'a>),
     Certificate(CertificateRef<'a>),
-    CertificateRequest(CertificateRequestRef<'a>),
     CertificateVerify(CertificateVerifyRef<'a>),
-    Finished(Finished<HashOutputSize<CipherSuite>>),
+    CertificateRequest(CertificateRequestRef<'a>),
+    Finished(Finished<ProviderHashOutputSize<Provider>>),
+    NewSessionTicket(NewSessionTicket<'a>),
 }
 
-impl<CipherSuite: TlsCipherSuite> ServerHandshake<'_, CipherSuite> {
+impl<Provider: CryptoProvider> ServerHandshake<'_, Provider> {
+    #[allow(dead_code)]
     #[allow(dead_code)]
     pub fn handshake_type(&self) -> HandshakeType {
         match self {
             ServerHandshake::ServerHello(_) => HandshakeType::ServerHello,
             ServerHandshake::EncryptedExtensions(_) => HandshakeType::EncryptedExtensions,
-            ServerHandshake::NewSessionTicket(_) => HandshakeType::NewSessionTicket,
             ServerHandshake::Certificate(_) => HandshakeType::Certificate,
             ServerHandshake::CertificateRequest(_) => HandshakeType::CertificateRequest,
             ServerHandshake::CertificateVerify(_) => HandshakeType::CertificateVerify,
             ServerHandshake::Finished(_) => HandshakeType::Finished,
+            ServerHandshake::NewSessionTicket(_) => HandshakeType::NewSessionTicket,
         }
     }
 }
 
-impl<CipherSuite: TlsCipherSuite> Debug for ServerHandshake<'_, CipherSuite> {
+impl<Provider: CryptoProvider> Debug for ServerHandshake<'_, Provider> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             ServerHandshake::ServerHello(inner) => Debug::fmt(inner, f),
@@ -167,7 +192,7 @@ impl<CipherSuite: TlsCipherSuite> Debug for ServerHandshake<'_, CipherSuite> {
 }
 
 #[cfg(feature = "defmt")]
-impl<'a, CipherSuite: TlsCipherSuite> defmt::Format for ServerHandshake<'a, CipherSuite> {
+impl<'a, Provider: CryptoProvider> defmt::Format for ServerHandshake<'a, Provider> {
     fn format(&self, f: defmt::Formatter<'_>) {
         match self {
             ServerHandshake::ServerHello(inner) => defmt::write!(f, "{}", inner),
@@ -181,61 +206,91 @@ impl<'a, CipherSuite: TlsCipherSuite> defmt::Format for ServerHandshake<'a, Ciph
     }
 }
 
-impl<'a, CipherSuite: TlsCipherSuite> ServerHandshake<'a, CipherSuite> {
+impl<'a, Provider: CryptoProvider> ServerHandshake<'a, Provider> {
     pub fn read(
         buf: &mut ParseBuffer<'a>,
-        digest: &mut CipherSuite::Hash,
-    ) -> Result<Self, TlsError> {
-        let handshake_start = buf.offset();
-        let mut handshake = Self::parse(buf)?;
-        let handshake_end = buf.offset();
-
-        if let ServerHandshake::Finished(finished) = &mut handshake {
-            finished.hash.replace(digest.clone().finalize());
-        }
-
-        digest.update(&buf.as_slice()[handshake_start..handshake_end]);
-
-        Ok(handshake)
-    }
-
-    fn parse(buf: &mut ParseBuffer<'a>) -> Result<Self, TlsError> {
+        digest: &mut Provider::Hash,
+    ) -> Result<ServerHandshake<'a, Provider>, TlsError> {
+        let content_length = buf.read_u24().map_err(|_| TlsError::InvalidHandshake)?;
         let handshake_type = HandshakeType::parse(buf).map_err(|_| TlsError::InvalidHandshake)?;
 
-        trace!("handshake = {:?}", handshake_type);
-
-        let content_len = buf.read_u24().map_err(|_| TlsError::InvalidHandshake)?;
-
-        let handshake = match handshake_type {
-            //HandshakeType::ClientHello => {}
+        let mut handshake = match handshake_type {
             HandshakeType::ServerHello => ServerHandshake::ServerHello(ServerHello::parse(buf)?),
             HandshakeType::NewSessionTicket => {
                 ServerHandshake::NewSessionTicket(NewSessionTicket::parse(buf)?)
             }
-            //HandshakeType::EndOfEarlyData => {}
             HandshakeType::EncryptedExtensions => {
                 ServerHandshake::EncryptedExtensions(EncryptedExtensions::parse(buf)?)
             }
             HandshakeType::Certificate => ServerHandshake::Certificate(CertificateRef::parse(buf)?),
-
             HandshakeType::CertificateRequest => {
                 ServerHandshake::CertificateRequest(CertificateRequestRef::parse(buf)?)
             }
-
             HandshakeType::CertificateVerify => {
                 ServerHandshake::CertificateVerify(CertificateVerifyRef::parse(buf)?)
             }
             HandshakeType::Finished => {
-                ServerHandshake::Finished(Finished::parse(buf, content_len)?)
+                ServerHandshake::Finished(Finished::parse(buf, content_length)?)
             }
-            //HandshakeType::KeyUpdate => {}
-            //HandshakeType::MessageHash => {}
-            t => {
-                warn!("Unimplemented handshake type: {:?}", t);
-                return Err(TlsError::Unimplemented);
+            _ => {
+                return Err(TlsError::InvalidHandshake);
             }
         };
 
+        if let ServerHandshake::Finished(finished) = &mut handshake {
+            let mut hash = digest.clone();
+            hash.update(buf.as_slice());
+            let mut out = Default::default();
+            hash.finalize_into(&mut out);
+            finished.hash = Some(out);
+        } else {
+            digest.update(buf.as_slice());
+        }
+
         Ok(handshake)
+    }
+}
+
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[allow(dead_code)]
+pub struct ClientCertificate<'a> {
+    pub certificate: Certificate<&'a [u8]>,
+}
+
+#[allow(dead_code)]
+impl<'a> ClientCertificate<'a> {
+    pub fn new(certificate: Certificate<&'a [u8]>) -> Self {
+        Self { certificate }
+    }
+
+    pub fn encode(&self, buf: &mut CryptoBuffer) -> Result<(), TlsError> {
+        self.certificate.encode(buf)
+    }
+}
+
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[allow(dead_code)]
+pub struct ClientCertificateVerify<'a> {
+    pub signature: &'a [u8],
+    pub signature_scheme: SignatureScheme,
+}
+
+#[allow(dead_code)]
+impl<'a> ClientCertificateVerify<'a> {
+    pub fn new(signature: &'a [u8], signature_scheme: SignatureScheme) -> Self {
+        Self {
+            signature,
+            signature_scheme,
+        }
+    }
+
+    pub fn encode(&self, buf: &mut CryptoBuffer) -> Result<(), TlsError> {
+        buf.push_u16(self.signature_scheme.as_u16())
+            .map_err(|_| TlsError::EncodeError)?;
+        buf.extend_from_slice(self.signature)
+            .map_err(|_| TlsError::EncodeError)?;
+        Ok(())
     }
 }
