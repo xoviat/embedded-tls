@@ -116,12 +116,7 @@ where
     }
 
     fn initialize(&mut self, ikm: &[u8]) {
-        let salt = if self.secret.iter().all(|&b| b == 0) {
-            &[] as &[u8]
-        } else {
-            self.secret.as_slice()
-        };
-        let prk = hkdf::hkdf_extract::<Provider::Hmac>(salt, ikm);
+        let prk = hkdf::hkdf_extract::<Provider::Hmac>(self.secret.as_slice(), ikm);
         self.secret = prk.clone();
         self.hkdf.replace(prk);
     }

@@ -14,7 +14,7 @@ use generic_array::ArrayLength;
 use heapless::Vec;
 use hmac::Hmac;
 use p256::ecdsa::SigningKey;
-use rand_core::CryptoRngCore;
+use rand_core::{CryptoRngCore, RngCore};
 pub use sha2::{Sha256, Sha384};
 use typenum::{Sum, U10, U12, U16, U32};
 
@@ -211,51 +211,58 @@ pub trait CryptoProvider {
     fn keygen(
         &mut self,
         group: NamedGroup,
-        secret_key: &[u8],
+        secret_key: &mut [u8],
         public_key: &mut [u8],
     ) -> Result<(), crate::TlsError> {
         match group {
             NamedGroup::Secp256r1 => {
                 use p256::elliptic_curve::sec1::ToEncodedPoint;
-                let secret = p256::SecretKey::from_slice(secret_key)
-                    .map_err(|_| crate::TlsError::InvalidKeyShare)?;
-                let pk = p256::PublicKey::from_secret_scalar(&secret.to_nonzero_scalar());
-                let point = pk.to_encoded_point(false);
-                public_key[..32].copy_from_slice(
-                    point
-                        .x()
-                        .ok_or(crate::TlsError::InvalidKeyShare)?
-                        .as_slice(),
-                );
-                public_key[32..].copy_from_slice(
-                    point
-                        .y()
-                        .ok_or(crate::TlsError::InvalidKeyShare)?
-                        .as_slice(),
-                );
-                Ok(())
+                loop {
+                    self.rng().fill_bytes(secret_key);
+                    if let Ok(secret) = p256::SecretKey::from_slice(secret_key) {
+                        let pk = p256::PublicKey::from_secret_scalar(&secret.to_nonzero_scalar());
+                        let point = pk.to_encoded_point(false);
+                        public_key[..32].copy_from_slice(
+                            point
+                                .x()
+                                .ok_or(crate::TlsError::InvalidKeyShare)?
+                                .as_slice(),
+                        );
+                        public_key[32..].copy_from_slice(
+                            point
+                                .y()
+                                .ok_or(crate::TlsError::InvalidKeyShare)?
+                                .as_slice(),
+                        );
+                        return Ok(());
+                    }
+                }
             }
             NamedGroup::Secp384r1 => {
                 #[cfg(feature = "p384")]
                 {
                     use p384::elliptic_curve::sec1::ToEncodedPoint;
-                    let secret = p384::SecretKey::from_slice(secret_key)
-                        .map_err(|_| crate::TlsError::InvalidKeyShare)?;
-                    let pk = p384::PublicKey::from_secret_scalar(&secret.to_nonzero_scalar());
-                    let point = pk.to_encoded_point(false);
-                    public_key[..48].copy_from_slice(
-                        point
-                            .x()
-                            .ok_or(crate::TlsError::InvalidKeyShare)?
-                            .as_slice(),
-                    );
-                    public_key[48..].copy_from_slice(
-                        point
-                            .y()
-                            .ok_or(crate::TlsError::InvalidKeyShare)?
-                            .as_slice(),
-                    );
-                    Ok(())
+                    loop {
+                        self.rng().fill_bytes(secret_key);
+                        if let Ok(secret) = p384::SecretKey::from_slice(secret_key) {
+                            let pk =
+                                p384::PublicKey::from_secret_scalar(&secret.to_nonzero_scalar());
+                            let point = pk.to_encoded_point(false);
+                            public_key[..48].copy_from_slice(
+                                point
+                                    .x()
+                                    .ok_or(crate::TlsError::InvalidKeyShare)?
+                                    .as_slice(),
+                            );
+                            public_key[48..].copy_from_slice(
+                                point
+                                    .y()
+                                    .ok_or(crate::TlsError::InvalidKeyShare)?
+                                    .as_slice(),
+                            );
+                            return Ok(());
+                        }
+                    }
                 }
                 #[cfg(not(feature = "p384"))]
                 Err(crate::TlsError::InvalidKeyShare)
@@ -318,7 +325,7 @@ impl<T: CryptoProvider> CryptoProvider for &mut T {
     fn keygen(
         &mut self,
         group: NamedGroup,
-        secret_key: &[u8],
+        secret_key: &mut [u8],
         public_key: &mut [u8],
     ) -> Result<(), crate::TlsError> {
         T::keygen(self, group, secret_key, public_key)
