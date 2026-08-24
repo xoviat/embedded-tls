@@ -43,8 +43,8 @@ impl<'a> ServerHello<'a> {
 
         let extensions = ServerHelloExtension::parse_vector(buf)?;
 
-        debug!("server random {:x}", random);
-        debug!("server session-id {:x}", session_id.as_slice());
+        // debug!("server random {:x}", random);
+        // debug!("server session-id {:x}", session_id.as_slice());
         debug!("server cipher_suite {:?}", cipher_suite);
         debug!("server extensions {:?}", extensions);
 

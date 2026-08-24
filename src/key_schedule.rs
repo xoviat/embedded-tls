@@ -6,6 +6,7 @@ use crate::{CryptoProvider, TlsError, config::TlsCipherSuite};
 use digest::OutputSizeUser;
 use digest::generic_array::ArrayLength;
 use sha2::digest::generic_array::{GenericArray, typenum::Unsigned};
+use subtle::ConstantTimeEq;
 
 // Backward-compatible alias (still used by handshake/finished, handshake/binder)
 #[allow(dead_code)]
@@ -121,6 +122,7 @@ where
             self.secret.as_slice()
         };
         let prk = hkdf::hkdf_extract::<Provider::Hmac>(salt, ikm);
+        self.secret = prk.clone();
         self.hkdf.replace(prk);
     }
 
@@ -528,6 +530,6 @@ where
         let mut verify = GenericArray::default();
         hmac.finalize_into(&mut verify);
 
-        Ok(verify.as_slice() == finished.verify.as_slice())
+        Ok(verify.as_slice().ct_eq(finished.verify.as_slice()).into())
     }
 }

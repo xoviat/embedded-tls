@@ -195,8 +195,7 @@ impl<'a, Provider: CryptoProvider> ServerHandshake<'a, Provider> {
         let handshake_end = buf.offset();
 
         if let ServerHandshake::Finished(finished) = &mut handshake {
-            let mut hash = digest.clone();
-            hash.update(&buf.as_slice()[handshake_start..handshake_end]);
+            let hash = digest.clone();
             let mut out = Default::default();
             hash.finalize_into(&mut out);
             finished.hash.replace(out);
