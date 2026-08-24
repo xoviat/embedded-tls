@@ -27,6 +27,8 @@ impl<'a> ServerHello<'a> {
             .read_u8()
             .map_err(|_| TlsError::InvalidSessionIdLength)?;
 
+        //info!("sh 1");
+
         let session_id = buf
             .slice(session_id_length as usize)
             .map_err(|_| TlsError::InvalidSessionIdLength)?;
@@ -41,8 +43,8 @@ impl<'a> ServerHello<'a> {
 
         let extensions = ServerHelloExtension::parse_vector(buf)?;
 
-        // debug!("server random {:x}", random);
-        // debug!("server session-id {:x}", session_id.as_slice());
+        debug!("server random {:x}", random);
+        debug!("server session-id {:x}", session_id.as_slice());
         debug!("server cipher_suite {:?}", cipher_suite);
         debug!("server extensions {:?}", extensions);
 

@@ -140,6 +140,11 @@ where
                 .encode(buf)?;
             }
 
+            // Section 4.2
+            // When multiple extensions of different types are present, the
+            // extensions MAY appear in any order, with the exception of
+            // "pre_shared_key" which MUST be the last extension in
+            // the ClientHello.
             if let Some((_, identities)) = &self.config.psk {
                 ClientHelloExtension::PreSharedKey(PreSharedKeyClientHello {
                     identities: identities.clone(),
