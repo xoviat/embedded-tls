@@ -91,7 +91,6 @@ impl<'a> WriteBuffer<'a> {
         record: &ClientRecord<Provider>,
         write_key_schedule: &mut WriteKeySchedule<Provider>,
         read_key_schedule: Option<&mut ReadKeySchedule<Provider>>,
-        provider: Option<&mut Provider>,
     ) -> Result<&[u8], TlsError> {
         write_record(
             self.buffer,
@@ -100,7 +99,6 @@ impl<'a> WriteBuffer<'a> {
             record,
             write_key_schedule,
             read_key_schedule,
-            provider,
         )
     }
 }
@@ -253,7 +251,6 @@ fn write_record<'a, Provider: CryptoProvider>(
     record: &ClientRecord<Provider>,
     write_key_schedule: &mut WriteKeySchedule<Provider>,
     read_key_schedule: Option<&mut ReadKeySchedule<Provider>>,
-    provider: Option<&mut Provider>,
 ) -> Result<&'a [u8], TlsError> {
     if current_header.is_some() {
         return Err(TlsError::InternalError);
@@ -268,7 +265,7 @@ fn write_record<'a, Provider: CryptoProvider>(
             .ok_or(TlsError::InternalError)?
             .transcript_hash();
 
-        record.finish_record(&mut buf, transcript, write_key_schedule, provider)?;
+        record.finish_record(&mut buf, transcript, write_key_schedule)?;
         Ok(buf.rewind())
     })?;
     close_record(buffer, pos, current_header, write_key_schedule)

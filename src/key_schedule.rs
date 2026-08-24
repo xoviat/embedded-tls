@@ -110,7 +110,7 @@ where
         }
     }
 
-    fn initialize(&mut self, ikm: &[u8], _provider: &mut Provider) {
+    fn initialize(&mut self, ikm: &[u8]) {
         let salt = if self.secret.iter().all(|&b| b == 0) {
             &[] as &[u8]
         } else {
@@ -129,8 +129,8 @@ where
             .make_expanded_hkdf_label::<ProviderHashOutputSize<Provider>>(label, context_type)
     }
 
-    fn derived(&mut self, provider: &mut Provider) -> Result<(), TlsError> {
-        self.secret = self.derive_secret(b"derived", ContextType::empty_hash(provider))?;
+    fn derived(&mut self) -> Result<(), TlsError> {
+        self.secret = self.derive_secret(b"derived", ContextType::empty_hash())?;
         Ok(())
     }
 }
@@ -234,7 +234,7 @@ where
         Self::Hash(out)
     }
 
-    fn empty_hash(provider: &mut Provider) -> Self {
+    fn empty_hash() -> Self {
         let mut hash = Provider::Hash::new();
         hash.update(&[]);
         let mut out = GenericArray::default();
@@ -297,7 +297,6 @@ where
 
     pub fn create_client_finished(
         &self,
-        provider: &mut Provider,
     ) -> Result<Finished<ProviderHashOutputSize<Provider>>, TlsError> {
         let key = self
             .client_state
@@ -349,22 +348,17 @@ where
         GenericArray::default()
     }
 
-    pub fn initialize_early_secret(
-        &mut self,
-        psk: Option<&[u8]>,
-        provider: &mut Provider,
-    ) -> Result<(), TlsError> {
+    pub fn initialize_early_secret(&mut self, psk: Option<&[u8]>) -> Result<(), TlsError> {
         self.shared.initialize(
             #[allow(clippy::or_fun_call)]
             psk.unwrap_or(Self::zero().as_slice()),
-            provider,
         );
 
         let binder_key = self
             .shared
-            .derive_secret(b"ext binder", ContextType::empty_hash(provider))?;
+            .derive_secret(b"ext binder", ContextType::empty_hash())?;
         self.client_state.binder_key.replace(binder_key);
-        self.shared.derived(provider)
+        self.shared.derived()
     }
 
     pub fn initialize_handshake_secret(
@@ -372,15 +366,15 @@ where
         ikm: &[u8],
         provider: &mut Provider,
     ) -> Result<(), TlsError> {
-        self.shared.initialize(ikm, provider);
+        self.shared.initialize(ikm);
         self.calculate_traffic_secrets(b"c hs traffic", b"s hs traffic", provider)?;
-        self.shared.derived(provider)
+        self.shared.derived()
     }
 
     pub fn initialize_master_secret(&mut self, provider: &mut Provider) -> Result<(), TlsError> {
-        self.shared.initialize(Self::zero().as_slice(), provider);
+        self.shared.initialize(Self::zero().as_slice());
         self.calculate_traffic_secrets(b"c ap traffic", b"s ap traffic", provider)?;
-        self.shared.derived(provider)
+        self.shared.derived()
     }
 
     fn calculate_traffic_secrets(
@@ -439,7 +433,6 @@ where
     pub fn create_psk_binder(
         &self,
         transcript_hash: &Provider::Hash,
-        provider: &mut Provider,
     ) -> Result<PskBinder<ProviderHashOutputSize<Provider>>, TlsError> {
         let key = self
             .binder_key
@@ -495,7 +488,6 @@ where
     pub fn verify_server_finished(
         &self,
         finished: &Finished<ProviderHashOutputSize<Provider>>,
-        provider: &mut Provider,
     ) -> Result<bool, TlsError> {
         let key = self
             .state

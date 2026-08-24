@@ -245,7 +245,6 @@ where {
             &ClientRecord::close_notify(is_opened),
             write_key_schedule,
             Some(read_key_schedule),
-            None,
         )?;
 
         self.delegate

@@ -121,11 +121,10 @@ where
         buf: &mut CryptoBuffer,
         transcript: &mut Provider::Hash,
         write_key_schedule: &mut WriteKeySchedule<Provider>,
-        provider: Option<&mut Provider>,
     ) -> Result<(), TlsError> {
         match self {
             ClientRecord::Handshake(handshake, false) => {
-                handshake.finalize(buf, transcript, write_key_schedule, provider)
+                handshake.finalize(buf, transcript, write_key_schedule)
             }
             ClientRecord::Handshake(_, true) => {
                 ClientHandshake::<Provider>::finalize_encrypted(buf, transcript);

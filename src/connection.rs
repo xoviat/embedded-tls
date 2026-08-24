@@ -223,7 +223,7 @@ impl<'a> State {
                 result
             }
             State::ClientFinished => {
-                let tx = client_finished(key_schedule, tx_buf, crypto_provider)?;
+                let tx = client_finished(key_schedule, tx_buf)?;
 
                 respond(tx, transport, key_schedule).await?;
 
@@ -299,7 +299,7 @@ impl<'a> State {
                 result
             }
             State::ClientFinished => {
-                let tx = client_finished(key_schedule, tx_buf, crypto_provider)?;
+                let tx = client_finished(key_schedule, tx_buf)?;
 
                 respond_blocking(tx, transport, key_schedule)?;
 
@@ -326,7 +326,6 @@ where
             &ClientRecord::Alert(Alert { level, description }, false),
             write_key_schedule,
             Some(read_key_schedule),
-            None,
         )?;
 
         respond_blocking(tx, transport, key_schedule)?;
@@ -370,7 +369,6 @@ where
             &ClientRecord::Alert(Alert { level, description }, false),
             write_key_schedule,
             Some(read_key_schedule),
-            None,
         )?;
 
         respond(tx, transport, key_schedule).await?;
@@ -412,15 +410,10 @@ fn client_hello<'r, Provider>(
 where
     Provider: CryptoProvider,
 {
-    key_schedule.initialize_early_secret(config.psk.as_ref().map(|p| p.0), crypto_provider)?;
+    key_schedule.initialize_early_secret(config.psk.as_ref().map(|p| p.0))?;
     let (write_key_schedule, read_key_schedule) = key_schedule.as_split();
     let client_hello = ClientRecord::client_hello(config, crypto_provider);
-    let slice = tx_buf.write_record(
-        &client_hello,
-        write_key_schedule,
-        Some(read_key_schedule),
-        Some(crypto_provider),
-    )?;
+    let slice = tx_buf.write_record(&client_hello, write_key_schedule, Some(read_key_schedule))?;
 
     if let ClientRecord::Handshake(ClientHandshake::ClientHello(client_hello), _) = client_hello {
         handshake.secret_key.replace(client_hello.secret_key);
@@ -511,7 +504,7 @@ where
                     handshake.certificate_request.replace(request.try_into()?);
                 }
                 ServerHandshake::Finished(finished) => {
-                    if !key_schedule.verify_server_finished(&finished, crypto_provider)? {
+                    if !key_schedule.verify_server_finished(&finished)? {
                         warn!("Server signature verification failed");
                         return Err(TlsError::InvalidSignature);
                     }
@@ -570,7 +563,6 @@ where
             &ClientRecord::Handshake(ClientHandshake::ClientCertificate(certificate), true),
             write_key_schedule,
             Some(read_key_schedule),
-            None,
         )
         .map(|slice| (next_state, slice))
 }
@@ -636,20 +628,19 @@ where
     let (write_key_schedule, read_key_schedule) = key_schedule.as_split();
 
     buffer
-        .write_record(&record, write_key_schedule, Some(read_key_schedule), None)
+        .write_record(&record, write_key_schedule, Some(read_key_schedule))
         .map(|slice| (result, slice))
 }
 
 fn client_finished<'r, Provider>(
     key_schedule: &mut KeySchedule<Provider>,
     buffer: &'r mut WriteBuffer,
-    provider: &mut Provider,
 ) -> Result<&'r [u8], TlsError>
 where
     Provider: CryptoProvider,
 {
     let client_finished = key_schedule
-        .create_client_finished(provider)
+        .create_client_finished()
         .map_err(|_| TlsError::InvalidHandshake)?;
 
     let (write_key_schedule, read_key_schedule) = key_schedule.as_split();
@@ -658,7 +649,6 @@ where
         &ClientRecord::Handshake(ClientHandshake::Finished(client_finished), true),
         write_key_schedule,
         Some(read_key_schedule),
-        None,
     )
 }
 

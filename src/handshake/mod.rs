@@ -112,11 +112,10 @@ where
         buf: &mut CryptoBuffer,
         transcript: &mut Provider::Hash,
         write_key_schedule: &mut WriteKeySchedule<Provider>,
-        provider: Option<&mut Provider>,
     ) -> Result<(), TlsError> {
         if let ClientHandshake::ClientHello(_hello) = self {
             let psk_binder = write_key_schedule
-                .create_psk_binder(transcript, provider.ok_or(TlsError::InternalError)?)
+                .create_psk_binder(transcript)
                 .map_err(|_| TlsError::InvalidHandshake)?;
             psk_binder.encode(buf)?;
         }

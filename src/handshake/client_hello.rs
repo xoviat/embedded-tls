@@ -164,7 +164,6 @@ where
         enc_buf: &mut [u8],
         transcript: &mut Provider::Hash,
         write_key_schedule: &mut WriteKeySchedule<Provider>,
-        provider: &mut Provider,
     ) -> Result<(), TlsError>
     where
         Provider: CryptoProvider<CipherSuite = CipherSuite>,
@@ -189,7 +188,7 @@ where
             let mut buf = CryptoBuffer::wrap(&mut enc_buf[binders_pos..]);
             // Create a binder and encode for each identity
             for _id in identities {
-                let binder = write_key_schedule.create_psk_binder(transcript, provider)?;
+                let binder = write_key_schedule.create_psk_binder(transcript)?;
                 binder.encode(&mut buf)?;
             }
 
