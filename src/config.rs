@@ -147,10 +147,6 @@ pub trait CryptoProvider {
 
     fn rng(&mut self) -> impl CryptoRngCore;
 
-    /// Factory: create a fresh hash instance.
-    fn hash(&mut self) -> Self::Hash;
-    /// Factory: create an HMAC instance with the given key.
-    fn hmac(&mut self, key: &[u8]) -> Result<Self::Hmac, crate::TlsError>;
     /// Factory: create an AEAD instance with the given key.
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, crate::TlsError>;
 
@@ -282,14 +278,6 @@ impl<T: CryptoProvider> CryptoProvider for &mut T {
         T::rng(self)
     }
 
-    fn hash(&mut self) -> Self::Hash {
-        T::hash(self)
-    }
-
-    fn hmac(&mut self, key: &[u8]) -> Result<Self::Hmac, crate::TlsError> {
-        T::hmac(self, key)
-    }
-
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, crate::TlsError> {
         T::aead(self, key)
     }
@@ -380,14 +368,6 @@ impl<RNG: CryptoRngCore> CryptoProvider for UnsecureProvider<'_, Aes128GcmSha256
         &mut self.rng
     }
 
-    fn hash(&mut self) -> Self::Hash {
-        Digest::new()
-    }
-
-    fn hmac(&mut self, key: &[u8]) -> Result<Self::Hmac, crate::TlsError> {
-        hmac::Mac::new_from_slice(key).map_err(|_| crate::TlsError::CryptoError)
-    }
-
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, crate::TlsError> {
         KeyInit::new_from_slice(key).map_err(|_| crate::TlsError::CryptoError)
     }
@@ -420,14 +400,6 @@ impl<RNG: CryptoRngCore> CryptoProvider for UnsecureProvider<'_, Aes256GcmSha384
 
     fn rng(&mut self) -> impl CryptoRngCore {
         &mut self.rng
-    }
-
-    fn hash(&mut self) -> Self::Hash {
-        Digest::new()
-    }
-
-    fn hmac(&mut self, key: &[u8]) -> Result<Self::Hmac, crate::TlsError> {
-        hmac::Mac::new_from_slice(key).map_err(|_| crate::TlsError::CryptoError)
     }
 
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, crate::TlsError> {

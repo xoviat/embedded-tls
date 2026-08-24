@@ -235,7 +235,7 @@ where
     }
 
     fn empty_hash(provider: &mut Provider) -> Self {
-        let mut hash = provider.hash();
+        let mut hash = Provider::Hash::new();
         hash.update(&[]);
         let mut out = GenericArray::default();
         hash.finalize_into(&mut out);
@@ -308,7 +308,7 @@ where
                 ContextType::None,
             )?;
 
-        let mut hmac = provider.hmac(&key).map_err(|_| TlsError::CryptoError)?;
+        let mut hmac = Provider::Hmac::new(&key).map_err(|_| TlsError::CryptoError)?;
         let mut transcript = GenericArray::default();
         let cloned = self.server_state.transcript_hash.clone();
         cloned.finalize_into(&mut transcript);
@@ -448,7 +448,7 @@ where
                 ContextType::None,
             )?;
 
-        let mut hmac = provider.hmac(&key).map_err(|_| TlsError::CryptoError)?;
+        let mut hmac = Provider::Hmac::new(&key).map_err(|_| TlsError::CryptoError)?;
         let mut transcript = GenericArray::default();
         let cloned = transcript_hash.clone();
         cloned.finalize_into(&mut transcript);
@@ -505,7 +505,7 @@ where
                 ContextType::None,
             )?;
 
-        let mut hmac = provider.hmac(&key).map_err(|_| TlsError::InternalError)?;
+        let mut hmac = Provider::Hmac::new(&key).map_err(|_| TlsError::InternalError)?;
         let hash = finished.hash.as_ref().ok_or_else(|| {
             warn!("No hash in Finished");
             TlsError::InternalError
