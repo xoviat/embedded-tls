@@ -50,6 +50,8 @@ where
         label: &[u8],
         context_type: ContextType<Provider>,
     ) -> Result<GenericArray<u8, N>, TlsError> {
+        //info!("make label {:?} {}", label, len);
+        // Max label buffer: hash_output (up to 48 for SHA-384) + 12 (longest label) + 10 (overhead) = 70
         let mut hkdf_label = heapless::Vec::<u8, 70>::new();
         hkdf_label
             .extend_from_slice(&N::to_u16().to_be_bytes())
@@ -81,12 +83,14 @@ where
         }
 
         let mut okm = GenericArray::default();
+        //info!("label {:x?}", label);
         hkdf::hkdf_expand::<Provider::Hmac>(
             self.as_ref()?.as_slice(),
             &hkdf_label,
             N::USIZE,
             &mut okm,
         )?;
+        //info!("expand {:x?}", okm);
         Ok(okm)
     }
 }
@@ -322,8 +326,13 @@ where
         counter: u64,
         iv: &IvArray<Provider::CipherSuite>,
     ) -> IvArray<Provider::CipherSuite> {
+        //info!("counter = {} {:x?}", counter, &counter.to_be_bytes(),);
         let counter =
             Self::pad::<<Provider::CipherSuite as TlsCipherSuite>::IvLen>(&counter.to_be_bytes());
+
+        //info!("counter = {:x?}", counter);
+        // info!("iv = {:x?}", iv);
+
         let mut nonce = GenericArray::default();
         for (index, (l, r)) in iv
             [0..<<Provider::CipherSuite as TlsCipherSuite>::IvLen as Unsigned>::to_usize()]
@@ -333,12 +342,22 @@ where
         {
             nonce[index] = l ^ r;
         }
+
+        //debug!("nonce {:x?}", nonce);
+
         nonce
     }
 
     fn pad<N: ArrayLength<u8>>(input: &[u8]) -> GenericArray<u8, N> {
+        // info!("padding input = {:x?}", input);
         let mut padded = GenericArray::default();
         for (index, byte) in input.iter().rev().enumerate() {
+            /*info!(
+                "{} pad {}={:x?}",
+                index,
+                ((N::to_usize() - index) - 1),
+                *byte
+            );*/
             padded[(N::to_usize() - index) - 1] = *byte;
         }
         padded
@@ -373,6 +392,9 @@ where
 
     pub fn initialize_master_secret(&mut self, provider: &mut Provider) -> Result<(), TlsError> {
         self.shared.initialize(Self::zero().as_slice());
+
+        //let context = self.transcript_hash.as_ref().unwrap().clone().finalize();
+        //info!("Derive keys, hash: {:x?}", context);
         self.calculate_traffic_secrets(b"c ap traffic", b"s ap traffic", provider)?;
         self.shared.derived()
     }

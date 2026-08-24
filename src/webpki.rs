@@ -175,6 +175,7 @@ where
         let handshake_hash = unwrap!(self.certificate_transcript.take());
         let ctx_str = b"TLS 1.3, server CertificateVerify\x00";
         let mut msg: Vec<u8, 130> = Vec::new();
+        // 64 (pad) + 34 (ctx) + 48 (SHA-384) = 146 bytes required
         msg.resize(64, 0x20).map_err(|_| TlsError::EncodeError)?;
         msg.extend_from_slice(ctx_str)
             .map_err(|_| TlsError::EncodeError)?;

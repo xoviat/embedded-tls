@@ -25,8 +25,15 @@ impl DecryptedReadHandler<'_> {
                     self.source_buffer.contains(&slice_ptrs.start)
                         && self.source_buffer.contains(&slice_ptrs.end)
                 );
-                let offset =
-                    unsafe { slice_ptrs.start.offset_from(self.source_buffer.start) as usize };
+                let offset = unsafe {
+                    // SAFETY: The assertion above ensures `slice` is a subslice of the read buffer.
+                    // This, in turn, ensures we don't violate safety constraints of `offset_from`.
+
+                    // TODO: We are only assuming here that the pointers are derived from the
+                    // read buffer. While this is reasonable, and we don't do any pointer magic,
+                    // it's not an invariant.
+                    slice_ptrs.start.offset_from(self.source_buffer.start) as usize
+                };
                 self.buffer_info.offset = offset;
                 self.buffer_info.len = slice.len();
                 self.buffer_info.consumed = 0;
@@ -42,10 +49,14 @@ impl DecryptedReadHandler<'_> {
             }
             ServerRecord::ChangeCipherSpec(_) => Err(TlsError::InternalError),
             ServerRecord::Handshake(ServerHandshake::NewSessionTicket(_)) => {
-                debug!("Received new session ticket");
+                // TODO: we should validate extensions and abort. We can do this automatically
+                // as long as the connection is unsplit, however, split connections must be aborted
+                // by the user.
                 Ok(())
             }
-            ServerRecord::Handshake(_) => Err(TlsError::InvalidHandshake),
+            ServerRecord::Handshake(_) => {
+                unimplemented!()
+            }
         }
     }
 }

@@ -548,6 +548,7 @@ where
         .ok_or(TlsError::InvalidHandshake)?
         .request_context;
 
+    // Declare cert before certificate so owned data outlives the CertificateRef that borrows it
     let cert = crypto_provider.client_cert();
     let mut certificate = CertificateRef::with_context(request_context);
     let next_state = if let Some(ref cert) = cert {

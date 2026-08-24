@@ -58,16 +58,16 @@ impl<'a> WriteBuffer<'a> {
         self.reborrow().is_full()
     }
 
-    pub fn append(&mut self, buf: &[u8]) -> usize {
-        self.reborrow_mut().append(buf)
-    }
-
     pub fn is_empty(&self) -> bool {
         self.reborrow().is_empty()
     }
 
     pub fn contains(&self, header: ClientRecordHeader) -> bool {
         self.reborrow().contains(header)
+    }
+
+    pub fn append(&mut self, buf: &[u8]) -> usize {
+        self.reborrow_mut().append(buf)
     }
 
     pub(crate) fn start_record(&mut self, header: ClientRecordHeader) -> Result<(), TlsError> {

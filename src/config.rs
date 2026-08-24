@@ -64,18 +64,31 @@ impl TlsCipherSuite for Aes256GcmSha384 {
 }
 
 /// A TLS 1.3 verifier.
+///
+/// The verifier is responsible for verifying certificates and signatures. Since certificate verification is
+/// an expensive process, this trait allows clients to choose how much verification should take place,
+/// and also to skip the verification if the server is verified through other means (I.e. a pre-shared key).
 pub trait TlsVerifier<Hash>
 where
     Hash: crate::crypto_traits::TlsHash,
 {
+    /// Host verification is enabled by passing a server hostname.
     fn set_hostname_verification(&mut self, hostname: &str) -> Result<(), crate::TlsError>;
 
+    /// Verify a certificate.
+    ///
+    /// The handshake transcript up to this point and the server certificate is provided
+    /// for the implementation to use. The verifier is responsible for resolving the CA
+    /// certificate internally.
     fn verify_certificate(
         &mut self,
         transcript: &Hash,
         cert: CertificateRef,
     ) -> Result<(), TlsError>;
 
+    /// Verify the certificate signature.
+    ///
+    /// The signature verification uses the transcript and certificate provided earlier to decode the provided signature.
     fn verify_signature(&mut self, verify: CertificateVerifyRef) -> Result<(), crate::TlsError>;
 }
 
@@ -255,6 +268,10 @@ pub trait CryptoProvider {
         Err::<&mut NoVerify, _>(crate::TlsError::Unimplemented)
     }
 
+    /// Provide a signing key for client certificate authentication.
+    ///
+    /// The provider resolves the private key internally (e.g. from memory, flash, or a hardware
+    /// crypto module such as an HSM/TPM/secure element).
     fn signer(
         &mut self,
     ) -> Result<(impl signature::SignerMut<Self::Signature>, SignatureScheme), crate::TlsError>
@@ -262,6 +279,12 @@ pub trait CryptoProvider {
         Err::<(NoSign, _), crate::TlsError>(crate::TlsError::Unimplemented)
     }
 
+    /// Resolve the client certificate for mutual TLS authentication.
+    ///
+    /// Return `None` if no client certificate is available (an empty certificate message will
+    /// be sent to the server). The data type `D` can be borrowed (`&[u8]`) or owned
+    /// (e.g. `heapless::Vec<u8, N>`) — the certificate is only needed long enough to encode
+    /// into the TLS message.
     fn client_cert(&mut self) -> Option<Certificate<impl AsRef<[u8]>>> {
         None::<Certificate<&[u8]>>
     }
@@ -439,6 +462,7 @@ impl<'a, Provider> TlsContext<'a, Provider>
 where
     Provider: CryptoProvider,
 {
+    /// Create a new context with a given config and a crypto provider.
     pub fn new(config: &'a TlsConfig<'a>, crypto_provider: Provider) -> Self {
         Self {
             config,
@@ -481,6 +505,7 @@ impl<'a> TlsConfig<'a> {
         config
     }
 
+    /// Enable RSA ciphers even if they might not be supported.
     pub fn enable_rsa_signatures(mut self) -> Self {
         unwrap!(
             self.signature_schemes
@@ -520,22 +545,47 @@ impl<'a> TlsConfig<'a> {
         self
     }
 
+    /// Configure ALPN protocol names to send in the ClientHello.
+    ///
+    /// The server will select one of the offered protocols and echo it back
+    /// in EncryptedExtensions. This is required for endpoints that multiplex
+    /// protocols on a single port (e.g. AWS IoT Core MQTT over port 443).
     pub fn with_alpn(mut self, protocols: &'a [&'a [u8]]) -> Self {
         self.alpn_protocols = Some(protocols);
         self
     }
 
+    /// Configures the maximum plaintext fragment size.
+    ///
+    /// This option may help reduce memory size, as smaller fragment lengths require smaller
+    /// read/write buffers. Note that embedded-tls does not currently use this option to fragment
+    /// writes. Note that the buffers need to include some overhead over the configured fragment
+    /// length.
+    ///
+    /// From [RFC 6066, Section 4.  Maximum Fragment Length Negotiation](https://www.rfc-editor.org/rfc/rfc6066#page=8):
+    ///
+    /// > Without this extension, TLS specifies a fixed maximum plaintext
+    /// > fragment length of 2^14 bytes.  It may be desirable for constrained
+    /// > clients to negotiate a smaller maximum fragment length due to memory
+    /// > limitations or bandwidth limitations.
+    ///
+    /// > For example, if the negotiated length is 2^9=512, then, when using currently defined
+    /// > cipher suites ([...]) and null compression, the record-layer output can be at most
+    /// > 805 bytes: 5 bytes of headers, 512 bytes of application data, 256 bytes of padding,
+    /// > and 32 bytes of MAC.
     pub fn with_max_fragment_length(mut self, max_fragment_length: MaxFragmentLength) -> Self {
         self.max_fragment_length = Some(max_fragment_length);
         self
     }
 
+    /// Resets the max fragment length to 14 bits (16384).
     pub fn reset_max_fragment_length(mut self) -> Self {
         self.max_fragment_length = None;
         self
     }
 
     pub fn with_psk(mut self, psk: &'a [u8], identities: &[&'a [u8]]) -> Self {
+        // TODO: Remove potential panic
         self.psk = Some((psk, unwrap!(Vec::from_slice(identities).ok())));
         self
     }

@@ -75,6 +75,8 @@ impl ClientRecordHeader {
 
         Ok(())
     }
+
+    //pub fn parse<D: Digest>(buf: &[u8]) -> Result<Self, TlsError> {}
 }
 
 impl<'config, Provider> ClientRecord<'config, '_, Provider>
@@ -214,4 +216,6 @@ impl<'a, Provider: CryptoProvider> ServerRecord<'a, Provider> {
             }
         }
     }
+
+    //pub fn parse<D: Digest>(buf: &[u8]) -> Result<Self, TlsError> {}
 }

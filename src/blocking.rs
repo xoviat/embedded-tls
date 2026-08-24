@@ -93,8 +93,7 @@ where
     ///
     /// Returns an error if the handshake does not proceed. If an error occurs, the connection
     /// instance must be recreated.
-    pub fn open(&mut self, mut context: TlsContext<Provider>) -> Result<(), TlsError>
-where {
+    pub fn open(&mut self, mut context: TlsContext<Provider>) -> Result<(), TlsError> {
         let mut handshake: Handshake<Provider> = Handshake::new();
         if let (Ok(verifier), Some(server_name)) = (
             context.crypto_provider.verifier(),

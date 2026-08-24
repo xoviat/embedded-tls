@@ -368,4 +368,116 @@ mod tests {
             assert_eq!(0, reader.pending);
         }
     }
+
+    #[test]
+    fn can_read_blocking_must_rotate_buffer() {
+        let mut transport = [
+            // Header
+            ContentType::ApplicationData as u8,
+            0x03,
+            0x03,
+            0x00,
+            0x04,
+            // Data
+            0xde,
+            0xad,
+            0xbe,
+            0xef,
+            // Header
+            ContentType::ApplicationData as u8,
+            0x03,
+            0x03,
+            0x00,
+            0x02,
+            // Data
+            0xaa,
+            0xbb,
+        ]
+        .as_slice();
+
+        let mut buf = [0; 4]; // cannot contain both data portions
+        let mut reader = RecordReader::new(&mut buf);
+        let mut provider = UnsecureProvider::new::<Aes128GcmSha256>(OsRng);
+        let mut key_schedule = KeySchedule::<UnsecureProvider<Aes128GcmSha256, OsRng>>::new();
+
+        {
+            if let ServerRecord::ApplicationData(data) = reader
+                .read_blocking(&mut transport, key_schedule.read_state())
+                .unwrap()
+            {
+                assert_eq!([0xde, 0xad, 0xbe, 0xef], data.data.as_slice());
+            } else {
+                panic!("Wrong server record");
+            }
+
+            assert_eq!(4, reader.decoded);
+            assert_eq!(0, reader.pending);
+        }
+
+        {
+            if let ServerRecord::ApplicationData(data) = reader
+                .read_blocking(&mut transport, key_schedule.read_state())
+                .unwrap()
+            {
+                assert_eq!([0xaa, 0xbb], data.data.as_slice());
+            } else {
+                panic!("Wrong server record");
+            }
+
+            assert_eq!(2, reader.decoded);
+            assert_eq!(0, reader.pending);
+        }
+    }
+
+    #[test]
+    fn can_read_empty_record() {
+        let mut transport = [
+            // Header
+            ContentType::ApplicationData as u8,
+            0x03,
+            0x03,
+            0x00,
+            0x00,
+            // Header
+            ContentType::ApplicationData as u8,
+            0x03,
+            0x03,
+            0x00,
+            0x00,
+        ]
+        .as_slice();
+
+        let mut buf = [0; 32];
+        let mut reader = RecordReader::new(&mut buf);
+        let mut provider = UnsecureProvider::new::<Aes128GcmSha256>(OsRng);
+        let mut key_schedule = KeySchedule::<UnsecureProvider<Aes128GcmSha256, OsRng>>::new();
+
+        {
+            if let ServerRecord::ApplicationData(data) = reader
+                .read_blocking(&mut transport, key_schedule.read_state())
+                .unwrap()
+            {
+                assert!(data.data.is_empty());
+            } else {
+                panic!("Wrong server record");
+            }
+
+            assert_eq!(0, reader.decoded);
+            assert_eq!(0, reader.pending);
+        }
+
+        {
+            if let ServerRecord::ApplicationData(data) = reader
+                .read_blocking(&mut transport, key_schedule.read_state())
+                .unwrap()
+            {
+                assert!(data.data.is_empty());
+            } else {
+                panic!("Wrong server record");
+            }
+
+            assert_eq!(0, reader.decoded);
+            assert_eq!(0, reader.pending);
+        }
+    }
 }
