@@ -113,13 +113,13 @@ where
         transcript: &mut Provider::Hash,
         write_key_schedule: &mut WriteKeySchedule<Provider>,
     ) -> Result<(), TlsError> {
-        if let ClientHandshake::ClientHello(_hello) = self {
-            let psk_binder = write_key_schedule
-                .create_psk_binder(transcript)
-                .map_err(|_| TlsError::InvalidHandshake)?;
-            psk_binder.encode(buf)?;
+        let enc_buf = buf.as_mut_slice();
+        if let ClientHandshake::ClientHello(hello) = self {
+            hello.finalize(enc_buf, transcript, write_key_schedule)
+        } else {
+            transcript.update(enc_buf);
+            Ok(())
         }
-        Ok(())
     }
 
     pub fn finalize_encrypted(buf: &mut CryptoBuffer, transcript: &mut Provider::Hash) {

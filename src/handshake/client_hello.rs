@@ -158,7 +158,6 @@ where
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn finalize<Provider>(
         &self,
         enc_buf: &mut [u8],
