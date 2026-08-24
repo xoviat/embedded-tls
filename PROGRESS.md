@@ -50,7 +50,7 @@ embedded-tls
 | `src/key_schedule.rs` | Generic over `Provider`. Inline HKDF. `KeyScheduleState` stores `aead: Option<Provider::Aead>` for reuse. |
 | `src/connection.rs` | `Handshake<Provider>` stores `secret_key: [u8; 32]`. `decrypt_record`/`encrypt` use `key_schedule.get_aead()`. `process_server_hello` uses `provider.ecdh()`. |
 | `src/handshake/mod.rs` | Generic over `Provider`. |
-| `src/handshake/client_hello.rs` | Uses `provider.keygen()`. Stores raw `secret_key`/`public_key`. |
+| `src/handshake/client_hello.rs` | Uses `provider.keygen()`. Stores `secret_key`/`public_key`. |
 | `src/handshake/server_hello.rs` | Exposes `server_public_key()`. Removed `EphemeralSecret`/`SharedSecret`/`CryptoEngine` deps. |
 | `src/record.rs` | Generic over `Provider`. |
 | `src/record_reader.rs` | Generic over `Provider`. |
@@ -62,6 +62,54 @@ embedded-tls
 | `src/common/decrypted_read_handler.rs` | Generic over `Provider`. |
 | `src/crypto_engine.rs` | **DELETED.** No longer needed. |
 | `Cargo.toml` | Removed `hkdf` dependency. |
+
+---
+
+## Bug Fixes Applied
+
+### Fixed: `SharedState::initialize` empty-salt bug
+**File:** `src/key_schedule.rs`
+
+The original diff special-cased an all-zeros salt and passed `&[]` (empty slice)
+to `hkdf_extract`. `HMAC([0; HashLen], ikm) ≠ HMAC("", ikm)`, which broke the
+entire key schedule. Fixed by always passing `self.secret.as_slice()`.
+
+### Fixed: `client_hello.rs` raw-random scalar panic vector
+**Files:** `src/config.rs`, `src/handshake/client_hello.rs`
+
+The original diff filled 32 random bytes and passed them to `keygen` as a raw
+scalar. The default software impl rejected values `≥ n` or `== 0` via
+`p256::SecretKey::from_slice`, creating a `~2⁻⁶²` panic vector.
+
+**Fix:**
+- Changed `keygen` signature from `secret_key: &[u8]` to `secret_key: &mut [u8]`
+  so the provider writes the actual scalar back.
+- Default impl now does rejection sampling internally: fills the buffer from
+  `self.rng()` in a loop until a valid scalar is found.
+- `client_hello.rs` no longer pre-fills `secret_key`; it passes an empty buffer
+  as an output parameter.
+
+This also fixes the secondary issue where a hardware provider might ignore the
+input scalar and generate its own keypair, causing a mismatch with the stored
+`secret_key`.
+
+### Already fixed: `verify_server_finished` non-constant-time comparison
+**File:** `src/key_schedule.rs`
+
+Uses `subtle::ConstantTimeEq::ct_eq` instead of `==` on HMAC tags.
+
+### Already fixed: `SharedState::initialize` missing `self.secret = prk`
+**File:** `src/key_schedule.rs`
+
+`self.secret = prk.clone();` is present after `hkdf_extract`.
+
+### Remaining (accepted for MVP): `hkdf_extract` panics on HMAC init failure
+**File:** `src/hkdf.rs`
+
+`hkdf_extract` uses `.expect("hkdf extract")` on `Hmac::new()`. For the RustCrypto
+software path this is safe, but for hardware HMAC peripherals (STM32, ESP32)
+that can fail when the peripheral is busy, this is a panic vector in `no_std`.
+Accepted for initial implementation.
 
 ---
 
@@ -82,13 +130,11 @@ impl CryptoProvider for EmbassyProvider<'_> {
     type Hmac = EmbassyHmac<'a>;
     type Aead = EmbassyAead<'a>;
 
-    fn hash(&mut self) -> Self::Hash { /* ... */ }
-    fn hmac(&mut self, key: &[u8]) -> Result<Self::Hmac, TlsError> { /* ... */ }
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, TlsError> { /* ... */ }
     fn ecdh(&mut self, group: NamedGroup, sk: &[u8], pk: &[u8], ss: &mut [u8]) -> Result<(), TlsError> {
         self.server.blocking_p256_ecdh(sk, pk, ss)
     }
-    fn keygen(&mut self, group: NamedGroup, sk: &[u8], pk: &mut [u8]) -> Result<(), TlsError> {
+    fn keygen(&mut self, group: NamedGroup, sk: &mut [u8], pk: &mut [u8]) -> Result<(), TlsError> {
         self.server.blocking_p256_keygen(sk, pk)
     }
     // rng, verifier, signer, client_cert unchanged
@@ -123,3 +169,7 @@ dispatch to the RustCrypto stack, so no changes are required for software-only u
   derivation, avoiding repeated `provider.aead(key)` calls per record.
 - **Blocking-first**: All trait methods are synchronous. A hardware provider can
   internally block-to-completion on the driver.
+- **`keygen` as output parameter**: `secret_key: &mut [u8]` instead of `&[u8]`
+  makes the contract unambiguous — the provider generates the keypair and writes
+  the actual secret scalar back, eliminating both the invalid-scalar panic vector
+  and the hardware-provider key-mismatch risk.
