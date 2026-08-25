@@ -45,9 +45,17 @@ struct RustPkiProvider<'a> {
 impl CryptoProvider for RustPkiProvider<'_> {
     type CipherSuite = Aes128GcmSha256;
     type Signature = Box<[u8]>;
+    type Hash = Sha256;
+    type Hmac = Hmac<Sha256>;
+    type Aead = Aes128Gcm;
 
     fn rng(&mut self) -> impl embedded_tls::CryptoRngCore {
         &mut self.rng
+    }
+
+    fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, embedded_tls::TlsError> {
+        use aes_gcm::aead::KeyInit;
+        Self::Aead::new_from_slice(key).map_err(|_| embedded_tls::TlsError::CryptoError)
     }
 
     fn verifier(&mut self) -> Result<&mut impl TlsVerifier<Sha256>, TlsError> {
