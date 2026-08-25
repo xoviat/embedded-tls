@@ -76,9 +76,12 @@ mod write_buffer;
 pub mod crypto_traits;
 mod hkdf;
 
-pub use config::{CryptoProvider, UnsecureProvider};
+pub use config::{
+    Aes128GcmSha256, Aes256GcmSha384, CryptoProvider, TlsCipherSuite, UnsecureProvider,
+};
 pub use crypto_traits::{TlsAead, TlsHash, TlsHmac};
 pub use extensions::extension_data::signature_algorithms::SignatureScheme;
+pub use extensions::extension_data::supported_groups::NamedGroup;
 pub use handshake::certificate_verify::CertificateVerify;
 pub use rand_core::{CryptoRng, CryptoRngCore};
 
