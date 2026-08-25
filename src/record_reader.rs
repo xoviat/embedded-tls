@@ -337,7 +337,7 @@ mod tests {
 
         let mut buf = [0; 32];
         let mut reader = RecordReader::new(&mut buf);
-        let mut provider = UnsecureProvider::new::<Aes128GcmSha256>(OsRng);
+        let _provider = UnsecureProvider::new::<Aes128GcmSha256>(OsRng);
         let mut key_schedule = KeySchedule::<UnsecureProvider<Aes128GcmSha256, OsRng>>::new();
 
         {
@@ -397,7 +397,7 @@ mod tests {
 
         let mut buf = [0; 4]; // cannot contain both data portions
         let mut reader = RecordReader::new(&mut buf);
-        let mut provider = UnsecureProvider::new::<Aes128GcmSha256>(OsRng);
+        let _provider = UnsecureProvider::new::<Aes128GcmSha256>(OsRng);
         let mut key_schedule = KeySchedule::<UnsecureProvider<Aes128GcmSha256, OsRng>>::new();
 
         {
@@ -449,7 +449,7 @@ mod tests {
 
         let mut buf = [0; 32];
         let mut reader = RecordReader::new(&mut buf);
-        let mut provider = UnsecureProvider::new::<Aes128GcmSha256>(OsRng);
+        let _provider = UnsecureProvider::new::<Aes128GcmSha256>(OsRng);
         let mut key_schedule = KeySchedule::<UnsecureProvider<Aes128GcmSha256, OsRng>>::new();
 
         {

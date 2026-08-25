@@ -1,8 +1,11 @@
 #![cfg(feature = "webpki")]
 
+use aes_gcm::Aes128Gcm;
 use embedded_io_adapters::tokio_1::FromTokio;
 use embedded_tls::webpki::CertVerifier;
 use embedded_tls::{Aes128GcmSha256, CryptoProvider, TlsVerifier};
+use hmac::Hmac;
+use sha2::Sha256;
 use std::net::SocketAddr;
 use std::sync::OnceLock;
 use std::time::SystemTime;
@@ -13,7 +16,7 @@ static LOG_INIT: OnceLock<()> = OnceLock::new();
 
 struct WebPkiProvider<'a> {
     rng: rand::rngs::OsRng,
-    verifier: CertVerifier<'a, Aes128GcmSha256, SystemTime, 4096>,
+    verifier: CertVerifier<'a, Sha256, SystemTime, 4096>,
 }
 
 impl CryptoProvider for WebPkiProvider<'_> {
@@ -24,9 +27,7 @@ impl CryptoProvider for WebPkiProvider<'_> {
         &mut self.rng
     }
 
-    fn verifier(
-        &mut self,
-    ) -> Result<&mut impl TlsVerifier<Aes128GcmSha256>, embedded_tls::TlsError> {
+    fn verifier(&mut self) -> Result<&mut impl TlsVerifier<Sha256>, embedded_tls::TlsError> {
         Ok(&mut self.verifier)
     }
 }

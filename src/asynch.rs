@@ -23,7 +23,7 @@ pub use crate::config::*;
 pub struct TlsConnection<'a, Socket, Provider>
 where
     Socket: AsyncRead + AsyncWrite + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     delegate: Socket,
     opened: AtomicBool,
@@ -37,7 +37,7 @@ where
 impl<'a, Socket, Provider> TlsConnection<'a, Socket, Provider>
 where
     Socket: AsyncRead + AsyncWrite + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     pub fn is_opened(&mut self) -> bool {
         *self.opened.get_mut()
@@ -298,7 +298,7 @@ where {
 impl<'a, Socket, Provider> ErrorType for TlsConnection<'a, Socket, Provider>
 where
     Socket: AsyncRead + AsyncWrite + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     type Error = TlsError;
 }
@@ -306,7 +306,7 @@ where
 impl<'a, Socket, Provider> AsyncRead for TlsConnection<'a, Socket, Provider>
 where
     Socket: AsyncRead + AsyncWrite + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         TlsConnection::read(self, buf).await
@@ -316,7 +316,7 @@ where
 impl<'a, Socket, Provider> BufRead for TlsConnection<'a, Socket, Provider>
 where
     Socket: AsyncRead + AsyncWrite + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     async fn fill_buf(&mut self) -> Result<&[u8], Self::Error> {
         self.read_buffered().await.map(|mut buf| buf.peek_all())
@@ -330,7 +330,7 @@ where
 impl<'a, Socket, Provider> AsyncWrite for TlsConnection<'a, Socket, Provider>
 where
     Socket: AsyncRead + AsyncWrite + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         TlsConnection::write(self, buf).await
@@ -343,7 +343,7 @@ where
 
 pub struct TlsReader<'a, Socket, Provider>
 where
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     opened: &'a AtomicBool,
     delegate: Socket,
@@ -354,7 +354,7 @@ where
 
 impl<Socket, Provider> AsRef<Socket> for TlsReader<'_, Socket, Provider>
 where
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     fn as_ref(&self) -> &Socket {
         &self.delegate
@@ -364,7 +364,7 @@ where
 impl<'a, Socket, Provider> TlsReader<'a, Socket, Provider>
 where
     Socket: AsyncRead + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     fn create_read_buffer(&mut self) -> ReadBuffer<'_> {
         self.decrypted.create_read_buffer(self.record_reader.buf)
@@ -409,7 +409,7 @@ where
 
 pub struct TlsWriter<'a, Socket, Provider>
 where
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     opened: &'a AtomicBool,
     delegate: Socket,
@@ -421,7 +421,7 @@ where
 impl<'a, Socket, Provider> TlsWriter<'a, Socket, Provider>
 where
     Socket: AsyncWrite + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     #[inline]
     async fn flush_transport(&mut self) -> Result<(), TlsError> {
@@ -434,7 +434,7 @@ where
 
 impl<Socket, Provider> AsRef<Socket> for TlsWriter<'_, Socket, Provider>
 where
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     fn as_ref(&self) -> &Socket {
         &self.delegate
@@ -443,14 +443,14 @@ where
 
 impl<Socket, Provider> ErrorType for TlsWriter<'_, Socket, Provider>
 where
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     type Error = TlsError;
 }
 
 impl<Socket, Provider> ErrorType for TlsReader<'_, Socket, Provider>
 where
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     type Error = TlsError;
 }
@@ -458,7 +458,7 @@ where
 impl<'a, Socket, Provider> AsyncRead for TlsReader<'a, Socket, Provider>
 where
     Socket: AsyncRead + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         if buf.is_empty() {
@@ -476,7 +476,7 @@ where
 impl<'a, Socket, Provider> BufRead for TlsReader<'a, Socket, Provider>
 where
     Socket: AsyncRead + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     async fn fill_buf(&mut self) -> Result<&[u8], Self::Error> {
         self.read_buffered().await.map(|mut buf| buf.peek_all())
@@ -490,7 +490,7 @@ where
 impl<'a, Socket, Provider> AsyncWrite for TlsWriter<'a, Socket, Provider>
 where
     Socket: AsyncWrite + 'a,
-    Provider: CryptoProvider + 'static,
+    Provider: CryptoProvider,
 {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         if self.opened.load(Ordering::Acquire) {
