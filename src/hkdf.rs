@@ -1,25 +1,22 @@
 use crate::TlsError;
-use crate::crypto_traits::TlsHmac;
-use generic_array::GenericArray;
+use digest::{Mac, KeyInit, Output, OutputSizeUser};
 use typenum::Unsigned;
 
 /// HKDF-Extract: PRK = HMAC-Hash(salt, IKM)
-pub fn hkdf_extract<H: TlsHmac>(salt: &[u8], ikm: &[u8]) -> GenericArray<u8, H::OutputSize> {
-    let mut hmac = H::new(salt).expect("hkdf extract");
+pub fn hkdf_extract<H: Mac + KeyInit>(salt: &[u8], ikm: &[u8]) -> Output<H> {
+    let mut hmac = H::new_from_slice(salt).expect("hkdf extract");
     hmac.update(ikm);
-    let mut prk = GenericArray::default();
-    hmac.finalize_into(&mut prk);
-    prk
+    hmac.finalize().into_bytes()
 }
 
 /// HKDF-Expand: OKM = T(1) || T(2) || ...
-pub fn hkdf_expand<H: TlsHmac>(
+pub fn hkdf_expand<H: Mac + KeyInit>(
     prk: &[u8],
     info: &[u8],
     length: usize,
     okm: &mut [u8],
 ) -> Result<(), TlsError> {
-    let hash_len = H::OutputSize::USIZE;
+    let hash_len = <H as OutputSizeUser>::OutputSize::USIZE;
     if length > 255 * hash_len {
         return Err(TlsError::InternalError);
     }
@@ -32,13 +29,12 @@ pub fn hkdf_expand<H: TlsHmac>(
     let mut written = 0;
 
     while written < length {
-        let mut hmac = H::new(prk).map_err(|_| TlsError::CryptoError)?;
+        let mut hmac = H::new_from_slice(prk).map_err(|_| TlsError::CryptoError)?;
         hmac.update(&t);
         hmac.update(info);
         hmac.update(&[n]);
 
-        let mut output = GenericArray::<u8, H::OutputSize>::default();
-        hmac.finalize_into(&mut output);
+        let output = hmac.finalize().into_bytes();
 
         t.clear();
         t.extend_from_slice(&output)
@@ -54,7 +50,7 @@ pub fn hkdf_expand<H: TlsHmac>(
 
 /// TLS 1.3 derive_secret = HKDF-Expand(secret, label, transcript_hash)
 #[allow(dead_code)]
-pub fn derive_secret<H: TlsHmac>(
+pub fn derive_secret<H: Mac + KeyInit>(
     secret: &[u8],
     label: &[u8],
     transcript_hash: &[u8],

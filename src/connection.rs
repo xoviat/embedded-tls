@@ -1,5 +1,7 @@
 use crate::config::TlsConfig;
-use crate::crypto_traits::{TlsAead, TlsHash};
+use crate::crypto_traits::TlsAead;
+use signature::SignatureEncoding;
+use digest::Digest;
 use crate::handshake::{ClientHandshake, ServerHandshake};
 use crate::key_schedule::{KeySchedule, ReadKeySchedule, WriteKeySchedule};
 use crate::record::{ClientRecord, ServerRecord};
@@ -18,9 +20,10 @@ use embedded_io_async::{Read as AsyncRead, Write as AsyncWrite};
 use crate::application_data::ApplicationData;
 use crate::buffer::CryptoBuffer;
 use crate::content_types::ContentType;
+use crate::extensions::extension_data::signature_algorithms::SignatureScheme;
 use crate::extensions::extension_data::supported_groups::NamedGroup;
 use crate::parse_buffer::ParseBuffer;
-use signature::SignerMut;
+use signature::Signer;
 
 // AES-GCM tag size is always 16 bytes for the supported cipher suites
 const TAG_SIZE: usize = 16;
@@ -51,7 +54,7 @@ where
         let (ciphertext, tag) = app_data.as_mut_slice().split_at_mut(ciphertext_len);
 
         let aead = key_schedule.get_aead().map_err(|_| TlsError::CryptoError)?;
-        aead.decrypt_in_place(&nonce, header.data(), ciphertext, tag)
+        aead.decrypt_in_place(nonce.as_ref(), header.data(), ciphertext, tag)
             .map_err(|_| TlsError::CryptoError)?;
 
         // After decryption, ciphertext contains plaintext
@@ -127,7 +130,7 @@ where
 
     let aead = key_schedule.get_aead().map_err(|_| TlsError::CryptoError)?;
     let mut tag = [0u8; TAG_SIZE];
-    aead.encrypt_in_place(&nonce, &additional_data, buf.as_mut_slice(), &mut tag)
+    aead.encrypt_in_place(nonce.as_ref(), &additional_data, buf.as_mut_slice(), &mut tag)
         .map_err(|_| TlsError::InvalidApplicationData)?;
     buf.extend_from_slice(&tag)
         .map_err(|_| TlsError::InsufficientSpace)?;
@@ -577,7 +580,7 @@ where
     Provider: CryptoProvider,
 {
     let (result, record) = match crypto_provider.signer() {
-        Ok((mut signing_key, signature_scheme)) => {
+        Ok((signing_key, signature_scheme)) => {
             let ctx_str = b"TLS 1.3, client CertificateVerify\x00";
 
             let mut msg: heapless::Vec<u8, 146> = heapless::Vec::new();
@@ -585,11 +588,9 @@ where
             msg.extend_from_slice(ctx_str)
                 .map_err(|_| TlsError::EncodeError)?;
 
-            let mut transcript_hash = generic_array::GenericArray::default();
-            key_schedule
-                .transcript_hash()
-                .clone()
-                .finalize_into(&mut transcript_hash);
+            let mut transcript_hash = Default::default();
+            let cloned = key_schedule.transcript_hash().clone();
+            Digest::finalize_into(cloned, &mut transcript_hash);
             msg.extend_from_slice(&transcript_hash)
                 .map_err(|_| TlsError::EncodeError)?;
 
@@ -597,13 +598,18 @@ where
 
             trace!(
                 "Signature: {:?} ({})",
-                signature.as_ref(),
-                signature.as_ref().len()
+                signature.to_bytes().as_ref(),
+                signature.to_bytes().as_ref().len()
             );
 
+            let signature = encode_certificate_verify_signature(
+                signature_scheme,
+                signature.to_bytes().as_ref(),
+            )?;
             let certificate_verify = CertificateVerify {
                 signature_scheme,
-                signature: heapless::Vec::from_slice(signature.as_ref()).unwrap(),
+                signature: heapless::Vec::from_slice(signature.as_slice())
+                    .map_err(|_| TlsError::EncodeError)?,
             };
 
             (
@@ -631,6 +637,67 @@ where
     buffer
         .write_record(&record, write_key_schedule, Some(read_key_schedule))
         .map(|slice| (result, slice))
+}
+
+/// Encodes provider signatures in the format required by TLS `CertificateVerify`.
+///
+/// The upgraded ECDSA API returns raw `r || s` bytes, while TLS requires ECDSA
+/// signatures to use ASN.1 DER encoding. Non-ECDSA signatures are copied unchanged.
+fn encode_certificate_verify_signature(
+    signature_scheme: SignatureScheme,
+    signature: &[u8],
+) -> Result<heapless::Vec<u8, 512>, TlsError> {
+    let is_ecdsa = matches!(
+        signature_scheme,
+        SignatureScheme::EcdsaSecp256r1Sha256
+            | SignatureScheme::EcdsaSecp384r1Sha384
+            | SignatureScheme::EcdsaSecp521r1Sha512
+            | SignatureScheme::Sha224Ecdsa
+            | SignatureScheme::EcdsaSha1
+            | SignatureScheme::Sha256BrainpoolP256r1
+            | SignatureScheme::Sha384BrainpoolP384r1
+            | SignatureScheme::Sha512BrainpoolP512r1
+    );
+
+    if !is_ecdsa {
+        return heapless::Vec::from_slice(signature).map_err(|_| TlsError::EncodeError);
+    }
+
+    if signature.len() == 0 || signature.len() % 2 != 0 {
+        return Err(TlsError::InvalidSignature);
+    }
+
+    let split = signature.len() / 2;
+    let mut integers = heapless::Vec::<u8, 512>::new();
+    for value in [&signature[..split], &signature[split..]] {
+        let value = value
+            .iter()
+            .position(|byte| *byte != 0)
+            .map(|index| &value[index..])
+            .unwrap_or(&value[value.len() - 1..]);
+        integers.push(0x02).map_err(|_| TlsError::EncodeError)?;
+        let needs_padding = value[0] & 0x80 != 0;
+        let length = value.len() + usize::from(needs_padding);
+        integers
+            .push(length as u8)
+            .map_err(|_| TlsError::EncodeError)?;
+        if needs_padding {
+            integers.push(0).map_err(|_| TlsError::EncodeError)?;
+        }
+        integers
+            .extend_from_slice(value)
+            .map_err(|_| TlsError::EncodeError)?;
+    }
+
+    let mut encoded = heapless::Vec::<u8, 512>::new();
+    encoded.push(0x30).map_err(|_| TlsError::EncodeError)?;
+    encoded
+        .push(integers.len() as u8)
+        .map_err(|_| TlsError::EncodeError)?;
+    encoded
+        .extend_from_slice(&integers)
+        .map_err(|_| TlsError::EncodeError)?;
+    Ok(encoded)
 }
 
 fn client_finished<'r, Provider>(

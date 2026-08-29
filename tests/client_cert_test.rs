@@ -1,7 +1,7 @@
 use aes_gcm::Aes128Gcm;
 use ecdsa::elliptic_curve::SecretKey;
 use embedded_io_adapters::tokio_1::FromTokio;
-use embedded_tls::{Certificate, CryptoProvider, SignatureScheme};
+use embedded_tls::{Certificate, CryptoProvider, SignatureScheme, crypto_traits::AesGcmAead};
 use hmac::Hmac;
 use p256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
@@ -79,23 +79,22 @@ struct Provider<'a> {
 
 impl CryptoProvider for Provider<'_> {
     type CipherSuite = embedded_tls::Aes128GcmSha256;
-    type Signature = p256::ecdsa::DerSignature;
+    type Signature = p256::ecdsa::Signature;
     type Hash = Sha256;
     type Hmac = Hmac<Sha256>;
-    type Aead = Aes128Gcm;
+    type Aead = AesGcmAead<Aes128Gcm>;
 
     fn rng(&mut self) -> impl CryptoRngCore {
         &mut self.rng
     }
 
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, embedded_tls::TlsError> {
-        use aes_gcm::aead::KeyInit;
-        Self::Aead::new_from_slice(key).map_err(|_| embedded_tls::TlsError::CryptoError)
+        AesGcmAead::new(key)
     }
 
     fn signer(
         &mut self,
-    ) -> Result<(impl signature::SignerMut<Self::Signature>, SignatureScheme), embedded_tls::TlsError>
+    ) -> Result<(impl signature::Signer<Self::Signature>, SignatureScheme), embedded_tls::TlsError>
     {
         let secret_key = SecretKey::from_sec1_der(self.priv_key)
             .map_err(|_| embedded_tls::TlsError::InvalidPrivateKey)?;
@@ -147,7 +146,13 @@ async fn test_client_certificate_auth() {
     };
     let open_fut = tls.open(TlsContext::new(&config, &mut provider));
     log::info!("SIZE of open fut is {}", core::mem::size_of_val(&open_fut));
-    open_fut.await.expect("error establishing TLS connection");
+    match open_fut.await {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("[DIAG] TLS open failed with error: {:?}", e);
+            panic!("error establishing TLS connection: {:?}", e);
+        }
+    }
     log::info!("Established");
 
     let write_fut = tls.write(b"ping");

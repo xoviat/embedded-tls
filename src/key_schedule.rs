@@ -1,27 +1,11 @@
-use crate::crypto_traits::{TlsHash, TlsHmac};
 use crate::handshake::binder::PskBinder;
 use crate::handshake::finished::Finished;
 use crate::hkdf;
 use crate::{CryptoProvider, TlsError, config::TlsCipherSuite};
-use digest::OutputSizeUser;
-use digest::generic_array::ArrayLength;
-use sha2::digest::generic_array::{GenericArray, typenum::Unsigned};
+use digest::{Digest, KeyInit, Mac, Output};
 use subtle::ConstantTimeEq;
 
-// Backward-compatible alias (still used by handshake/finished, handshake/binder)
-#[allow(dead_code)]
-pub type HashOutputSize<CipherSuite> =
-    <<CipherSuite as TlsCipherSuite>::Hash as OutputSizeUser>::OutputSize;
-
-pub type IvArray<CipherSuite> = GenericArray<u8, <CipherSuite as TlsCipherSuite>::IvLen>;
-pub type KeyArray<CipherSuite> = GenericArray<u8, <CipherSuite as TlsCipherSuite>::KeyLen>;
-#[allow(dead_code)]
-pub type HashArray<CipherSuite> = GenericArray<u8, HashOutputSize<CipherSuite>>;
-
-// Provider-based aliases
-pub type ProviderHashOutputSize<Provider> =
-    <<Provider as CryptoProvider>::Hash as TlsHash>::OutputSize;
-pub type ProviderHashArray<Provider> = GenericArray<u8, ProviderHashOutputSize<Provider>>;
+pub type ProviderHashArray<Provider> = Output<<Provider as CryptoProvider>::Hash>;
 
 enum Secret<Provider>
 where
@@ -46,18 +30,16 @@ where
         }
     }
 
-    fn make_expanded_hkdf_label<N: ArrayLength<u8>>(
+    fn make_expanded_hkdf_label(
         &self,
         label: &[u8],
         context_type: ContextType<Provider>,
-    ) -> Result<GenericArray<u8, N>, TlsError> {
-        //info!("make label {:?} {}", label, len);
-        // Max label buffer: hash_output (up to 48 for SHA-384) + 12 (longest label) + 10 (overhead) = 70
+        out: &mut [u8],
+    ) -> Result<(), TlsError> {
         let mut hkdf_label = heapless::Vec::<u8, 70>::new();
         hkdf_label
-            .extend_from_slice(&N::to_u16().to_be_bytes())
+            .extend_from_slice(&(out.len() as u16).to_be_bytes())
             .map_err(|_| TlsError::InternalError)?;
-
         let label_len = 6 + label.len() as u8;
         hkdf_label
             .extend_from_slice(&label_len.to_be_bytes())
@@ -83,16 +65,13 @@ where
             }
         }
 
-        let mut okm = GenericArray::default();
-        //info!("label {:x?}", label);
         hkdf::hkdf_expand::<Provider::Hmac>(
             self.as_ref()?.as_slice(),
             &hkdf_label,
-            N::USIZE,
-            &mut okm,
+            out.len(),
+            out,
         )?;
-        //info!("expand {:x?}", okm);
-        Ok(okm)
+        Ok(())
     }
 }
 
@@ -110,7 +89,7 @@ where
 {
     fn new() -> Self {
         Self {
-            secret: GenericArray::default(),
+            secret: ProviderHashArray::<Provider>::default(),
             hkdf: Secret::Uninitialized,
         }
     }
@@ -126,8 +105,10 @@ where
         label: &[u8],
         context_type: ContextType<Provider>,
     ) -> Result<ProviderHashArray<Provider>, TlsError> {
+        let mut out: ProviderHashArray<Provider> = Default::default();
         self.hkdf
-            .make_expanded_hkdf_label::<ProviderHashOutputSize<Provider>>(label, context_type)
+            .make_expanded_hkdf_label(label, context_type, out.as_mut())?;
+        Ok(out)
     }
 
     fn derived(&mut self) -> Result<(), TlsError> {
@@ -142,8 +123,8 @@ where
 {
     traffic_secret: Secret<Provider>,
     counter: u64,
-    key: KeyArray<Provider::CipherSuite>,
-    iv: IvArray<Provider::CipherSuite>,
+    key: <Provider::CipherSuite as TlsCipherSuite>::KeyArray,
+    iv: <Provider::CipherSuite as TlsCipherSuite>::IvArray,
     aead: Option<Provider::Aead>,
 }
 
@@ -155,24 +136,28 @@ where
         Self {
             traffic_secret: Secret::Uninitialized,
             counter: 0,
-            key: KeyArray::<Provider::CipherSuite>::default(),
-            iv: IvArray::<Provider::CipherSuite>::default(),
+            key: Default::default(),
+            iv: Default::default(),
             aead: None,
         }
     }
 
     #[inline]
     #[allow(dead_code)]
-    pub fn get_key(&self) -> Result<&KeyArray<Provider::CipherSuite>, TlsError> {
+    pub fn get_key(
+        &self,
+    ) -> Result<&<Provider::CipherSuite as TlsCipherSuite>::KeyArray, TlsError> {
         Ok(&self.key)
     }
 
     #[inline]
-    pub fn get_iv(&self) -> Result<&IvArray<Provider::CipherSuite>, TlsError> {
+    pub fn get_iv(&self) -> Result<&<Provider::CipherSuite as TlsCipherSuite>::IvArray, TlsError> {
         Ok(&self.iv)
     }
 
-    pub fn get_nonce(&self) -> Result<IvArray<Provider::CipherSuite>, TlsError> {
+    pub fn get_nonce(
+        &self,
+    ) -> Result<<Provider::CipherSuite as TlsCipherSuite>::IvArray, TlsError> {
         let iv = self.get_iv()?;
         Ok(KeySchedule::<Provider>::get_nonce(self.counter, iv))
     }
@@ -188,24 +173,36 @@ where
         transcript_hash: &Provider::Hash,
         provider: &mut Provider,
     ) -> Result<(), TlsError> {
-        let mut context = GenericArray::default();
+        let mut context: ProviderHashArray<Provider> = Default::default();
         let cloned = transcript_hash.clone();
-        cloned.finalize_into(&mut context);
+        Digest::finalize_into(cloned, context.as_mut());
 
         let secret = shared.derive_secret(label, ContextType::Hash(context))?;
         self.traffic_secret.replace(secret);
 
-        self.key = self
-            .traffic_secret
-            .make_expanded_hkdf_label(b"key", ContextType::None)?;
-        self.iv = self
-            .traffic_secret
-            .make_expanded_hkdf_label(b"iv", ContextType::None)?;
-        self.aead = Some(
-            provider
-                .aead(&self.key)
-                .map_err(|_| TlsError::CryptoError)?,
+        let mut key: <Provider::CipherSuite as TlsCipherSuite>::KeyArray = Default::default();
+        self.traffic_secret
+            .make_expanded_hkdf_label(b"key", ContextType::None, key.as_mut())?;
+        self.key = key;
+
+        let mut iv: <Provider::CipherSuite as TlsCipherSuite>::IvArray = Default::default();
+        self.traffic_secret
+            .make_expanded_hkdf_label(b"iv", ContextType::None, iv.as_mut())?;
+        self.iv = iv;
+
+        eprintln!(
+            "[DIAG] calculate_traffic_secret: key_len={}, iv_len={}",
+            self.key.as_ref().len(),
+            self.iv.as_ref().len()
         );
+        self.aead = Some(provider.aead(self.key.as_ref()).map_err(|e| {
+            eprintln!(
+                "[DIAG] provider.aead() failed: key_len={}, err={:?}",
+                self.key.as_ref().len(),
+                e
+            );
+            TlsError::CryptoError
+        })?);
         self.counter = 0;
         Ok(())
     }
@@ -229,17 +226,17 @@ where
 {
     #[allow(dead_code)]
     fn transcript_hash(hash: &Provider::Hash) -> Self {
-        let mut out = GenericArray::default();
+        let mut out: ProviderHashArray<Provider> = Default::default();
         let cloned = hash.clone();
-        cloned.finalize_into(&mut out);
+        Digest::finalize_into(cloned, out.as_mut());
         Self::Hash(out)
     }
 
     fn empty_hash() -> Self {
         let mut hash = Provider::Hash::new();
-        hash.update(&[]);
-        let mut out = GenericArray::default();
-        hash.finalize_into(&mut out);
+        Digest::update(&mut hash, &[]);
+        let mut out: ProviderHashArray<Provider> = Default::default();
+        Digest::finalize_into(hash, out.as_mut());
         Self::Hash(out)
     }
 }
@@ -296,72 +293,52 @@ where
         &mut self.server_state
     }
 
-    pub fn create_client_finished(
-        &self,
-    ) -> Result<Finished<ProviderHashOutputSize<Provider>>, TlsError> {
-        let key = self
-            .client_state
+    pub fn create_client_finished(&self) -> Result<Finished<Provider::Hash>, TlsError> {
+        let mut key: ProviderHashArray<Provider> = Default::default();
+        self.client_state
             .state
             .traffic_secret
-            .make_expanded_hkdf_label::<ProviderHashOutputSize<Provider>>(
-                b"finished",
-                ContextType::None,
-            )?;
+            .make_expanded_hkdf_label(b"finished", ContextType::None, key.as_mut())?;
 
-        let mut hmac = Provider::Hmac::new(&key).map_err(|_| TlsError::CryptoError)?;
-        let mut transcript = GenericArray::default();
+        eprintln!("[DIAG] create_client_finished: key_len={}", key.len());
+        let mut hmac = Provider::Hmac::new_from_slice(&key).map_err(|e| {
+            eprintln!("[DIAG] Hmac::new_from_slice failed in create_client_finished: key_len={}, err={:?}", key.len(), e);
+            TlsError::CryptoError
+        })?;
+        let mut transcript: ProviderHashArray<Provider> = Default::default();
         let cloned = self.server_state.transcript_hash.clone();
-        cloned.finalize_into(&mut transcript);
-        hmac.update(&transcript);
-        let mut verify = GenericArray::default();
-        hmac.finalize_into(&mut verify);
+        Digest::finalize_into(cloned, transcript.as_mut());
+        Mac::update(&mut hmac, &transcript);
+        let verify = hmac.finalize().into_bytes();
 
         Ok(Finished { verify, hash: None })
     }
 
     fn get_nonce(
         counter: u64,
-        iv: &IvArray<Provider::CipherSuite>,
-    ) -> IvArray<Provider::CipherSuite> {
-        //info!("counter = {} {:x?}", counter, &counter.to_be_bytes(),);
-        let counter =
-            Self::pad::<<Provider::CipherSuite as TlsCipherSuite>::IvLen>(&counter.to_be_bytes());
+        iv: &<Provider::CipherSuite as TlsCipherSuite>::IvArray,
+    ) -> <Provider::CipherSuite as TlsCipherSuite>::IvArray {
+        let iv_len = iv.as_ref().len();
+        let mut counter_bytes = [0u8; 12];
+        let counter_slice = &counter.to_be_bytes();
+        let start = counter_bytes.len() - counter_slice.len();
+        counter_bytes[start..].copy_from_slice(counter_slice);
 
-        //info!("counter = {:x?}", counter);
-        // info!("iv = {:x?}", iv);
-
-        let mut nonce = GenericArray::default();
-        for (index, (l, r)) in iv
-            [0..<<Provider::CipherSuite as TlsCipherSuite>::IvLen as Unsigned>::to_usize()]
+        let mut nonce: <Provider::CipherSuite as TlsCipherSuite>::IvArray = Default::default();
+        let nonce_ref: &mut [u8] = nonce.as_mut();
+        for (index, (l, r)) in iv.as_ref()[0..iv_len]
             .iter()
-            .zip(counter.iter())
+            .zip(counter_bytes[counter_bytes.len() - iv_len..].iter())
             .enumerate()
         {
-            nonce[index] = l ^ r;
+            nonce_ref[index] = l ^ r;
         }
-
-        //debug!("nonce {:x?}", nonce);
 
         nonce
     }
 
-    fn pad<N: ArrayLength<u8>>(input: &[u8]) -> GenericArray<u8, N> {
-        // info!("padding input = {:x?}", input);
-        let mut padded = GenericArray::default();
-        for (index, byte) in input.iter().rev().enumerate() {
-            /*info!(
-                "{} pad {}={:x?}",
-                index,
-                ((N::to_usize() - index) - 1),
-                *byte
-            );*/
-            padded[(N::to_usize() - index) - 1] = *byte;
-        }
-        padded
-    }
-
     fn zero() -> ProviderHashArray<Provider> {
-        GenericArray::default()
+        Default::default()
     }
 
     pub fn initialize_early_secret(&mut self, psk: Option<&[u8]>) -> Result<(), TlsError> {
@@ -390,8 +367,6 @@ where
     pub fn initialize_master_secret(&mut self, provider: &mut Provider) -> Result<(), TlsError> {
         self.shared.initialize(Self::zero().as_slice());
 
-        //let context = self.transcript_hash.as_ref().unwrap().clone().finalize();
-        //info!("Derive keys, hash: {:x?}", context);
         self.calculate_traffic_secrets(b"c ap traffic", b"s ap traffic", provider)?;
         self.shared.derived()
     }
@@ -437,11 +412,15 @@ where
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_key(&self) -> Result<&KeyArray<Provider::CipherSuite>, TlsError> {
+    pub(crate) fn get_key(
+        &self,
+    ) -> Result<&<Provider::CipherSuite as TlsCipherSuite>::KeyArray, TlsError> {
         self.state.get_key()
     }
 
-    pub(crate) fn get_nonce(&self) -> Result<IvArray<Provider::CipherSuite>, TlsError> {
+    pub(crate) fn get_nonce(
+        &self,
+    ) -> Result<<Provider::CipherSuite as TlsCipherSuite>::IvArray, TlsError> {
         self.state.get_nonce()
     }
 
@@ -452,22 +431,22 @@ where
     pub fn create_psk_binder(
         &self,
         transcript_hash: &Provider::Hash,
-    ) -> Result<PskBinder<ProviderHashOutputSize<Provider>>, TlsError> {
-        let key = self
-            .binder_key
-            .make_expanded_hkdf_label::<ProviderHashOutputSize<Provider>>(
-                b"finished",
-                ContextType::None,
-            )?;
+    ) -> Result<PskBinder<Provider::Hash>, TlsError> {
+        let mut key: ProviderHashArray<Provider> = Default::default();
+        self.binder_key
+            .make_expanded_hkdf_label(b"finished", ContextType::None, key.as_mut())?;
 
-        let mut hmac = Provider::Hmac::new(&key).map_err(|_| TlsError::CryptoError)?;
-        let mut transcript = GenericArray::default();
+        eprintln!("[DIAG] create_client_finished: key_len={}", key.len());
+        let mut hmac = Provider::Hmac::new_from_slice(&key).map_err(|e| {
+            eprintln!("[DIAG] Hmac::new_from_slice failed in create_client_finished: key_len={}, err={:?}", key.len(), e);
+            TlsError::CryptoError
+        })?;
+        let mut transcript: ProviderHashArray<Provider> = Default::default();
         let cloned = transcript_hash.clone();
-        cloned.finalize_into(&mut transcript);
-        hmac.update(&transcript);
-        let mut verify = GenericArray::default();
-        hmac.finalize_into(&mut verify);
-        Ok(PskBinder { verify })
+        Digest::finalize_into(cloned, transcript.as_mut());
+        Mac::update(&mut hmac, &transcript);
+        let verify = hmac.finalize().into_bytes();
+        Ok(PskBinder::new(verify))
     }
 }
 
@@ -492,11 +471,15 @@ where
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_key(&self) -> Result<&KeyArray<Provider::CipherSuite>, TlsError> {
+    pub(crate) fn get_key(
+        &self,
+    ) -> Result<&<Provider::CipherSuite as TlsCipherSuite>::KeyArray, TlsError> {
         self.state.get_key()
     }
 
-    pub(crate) fn get_nonce(&self) -> Result<IvArray<Provider::CipherSuite>, TlsError> {
+    pub(crate) fn get_nonce(
+        &self,
+    ) -> Result<<Provider::CipherSuite as TlsCipherSuite>::IvArray, TlsError> {
         self.state.get_nonce()
     }
 
@@ -506,24 +489,22 @@ where
 
     pub fn verify_server_finished(
         &self,
-        finished: &Finished<ProviderHashOutputSize<Provider>>,
+        finished: &Finished<Provider::Hash>,
     ) -> Result<bool, TlsError> {
-        let key = self
-            .state
-            .traffic_secret
-            .make_expanded_hkdf_label::<ProviderHashOutputSize<Provider>>(
-                b"finished",
-                ContextType::None,
-            )?;
+        let mut key: ProviderHashArray<Provider> = Default::default();
+        self.state.traffic_secret.make_expanded_hkdf_label(
+            b"finished",
+            ContextType::None,
+            key.as_mut(),
+        )?;
 
-        let mut hmac = Provider::Hmac::new(&key).map_err(|_| TlsError::InternalError)?;
+        let mut hmac = Provider::Hmac::new_from_slice(&key).map_err(|_| TlsError::InternalError)?;
         let hash = finished.hash.as_ref().ok_or_else(|| {
             warn!("No hash in Finished");
             TlsError::InternalError
         })?;
-        hmac.update(hash);
-        let mut verify = GenericArray::default();
-        hmac.finalize_into(&mut verify);
+        Mac::update(&mut hmac, hash);
+        let verify = hmac.finalize().into_bytes();
 
         Ok(verify.as_slice().ct_eq(finished.verify.as_slice()).into())
     }

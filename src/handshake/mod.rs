@@ -1,7 +1,7 @@
 //use p256::elliptic_curve::AffinePoint;
 use crate::CertificateVerify;
 use crate::TlsError;
-use crate::crypto_traits::TlsHash;
+use digest::Digest;
 use crate::handshake::certificate::CertificateRef;
 use crate::handshake::certificate_request::CertificateRequestRef;
 use crate::handshake::certificate_verify::CertificateVerifyRef;
@@ -10,7 +10,6 @@ use crate::handshake::encrypted_extensions::EncryptedExtensions;
 use crate::handshake::finished::Finished;
 use crate::handshake::new_session_ticket::NewSessionTicket;
 use crate::handshake::server_hello::ServerHello;
-use crate::key_schedule::ProviderHashOutputSize;
 use crate::parse_buffer::{ParseBuffer, ParseError};
 use crate::{CryptoProvider, buffer::CryptoBuffer, key_schedule::WriteKeySchedule};
 use core::fmt::{Debug, Formatter};
@@ -78,7 +77,7 @@ where
     ClientHello(ClientHello<'config, Provider::CipherSuite>),
     ClientCertificate(CertificateRef<'a>),
     ClientCertificateVerify(CertificateVerify),
-    Finished(Finished<ProviderHashOutputSize<Provider>>),
+    Finished(Finished<Provider::Hash>),
 }
 
 impl<Provider> ClientHandshake<'_, '_, Provider>
@@ -141,7 +140,7 @@ pub enum ServerHandshake<'a, Provider: CryptoProvider> {
     Certificate(CertificateRef<'a>),
     CertificateRequest(CertificateRequestRef<'a>),
     CertificateVerify(CertificateVerifyRef<'a>),
-    Finished(Finished<ProviderHashOutputSize<Provider>>),
+    Finished(Finished<Provider::Hash>),
 }
 
 impl<Provider: CryptoProvider> ServerHandshake<'_, Provider> {
@@ -197,7 +196,7 @@ impl<'a, Provider: CryptoProvider> ServerHandshake<'a, Provider> {
         if let ServerHandshake::Finished(finished) = &mut handshake {
             let hash = digest.clone();
             let mut out = Default::default();
-            hash.finalize_into(&mut out);
+            Digest::finalize_into(hash, &mut out);
             finished.hash.replace(out);
         }
 

@@ -1,13 +1,13 @@
+use rand_core::RngCore;
 use core::marker::PhantomData;
 
 use digest::OutputSizeUser;
-use heapless::Vec;
-use p256::elliptic_curve::rand_core::RngCore;
 use typenum::Unsigned;
+use heapless::Vec;
 
 use crate::buffer::CryptoBuffer;
 use crate::config::{TlsCipherSuite, TlsConfig};
-use crate::crypto_traits::TlsHash;
+use digest::Digest;
 use crate::extensions::extension_data::alpn::AlpnProtocolNameList;
 use crate::extensions::extension_data::key_share::{KeyShareClientHello, KeyShareEntry};
 use crate::extensions::extension_data::pre_shared_key::PreSharedKeyClientHello;
@@ -20,7 +20,7 @@ use crate::extensions::extension_data::supported_groups::{NamedGroup, SupportedG
 use crate::extensions::extension_data::supported_versions::{SupportedVersionsClientHello, TLS13};
 use crate::extensions::messages::ClientHelloExtension;
 use crate::handshake::{LEGACY_VERSION, Random};
-use crate::key_schedule::{HashOutputSize, WriteKeySchedule};
+use crate::key_schedule::WriteKeySchedule;
 use crate::{CryptoProvider, TlsError};
 
 #[derive(Debug)]
@@ -147,7 +147,7 @@ where
             if let Some((_, identities)) = &self.config.psk {
                 ClientHelloExtension::PreSharedKey(PreSharedKeyClientHello {
                     identities: identities.clone(),
-                    hash_size: <CipherSuite::Hash as OutputSizeUser>::output_size(),
+                    hash_size: <CipherSuite::Hash as OutputSizeUser>::OutputSize::USIZE,
                 })
                 .encode(buf)?;
             }
@@ -176,7 +176,7 @@ where
         // This causes a few issues since lengths must be correctly inside the payload,
         // but won't actually be added to the record buffer until the end.
         if let Some((_, identities)) = &self.config.psk {
-            let binders_len = identities.len() * (1 + HashOutputSize::<CipherSuite>::to_usize());
+            let binders_len = identities.len() * (1 + <CipherSuite::Hash as OutputSizeUser>::OutputSize::USIZE);
 
             let binders_pos = enc_buf.len() - binders_len;
 

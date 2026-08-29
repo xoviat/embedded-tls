@@ -3,14 +3,17 @@
 use aes_gcm::Aes128Gcm;
 use embedded_io_adapters::tokio_1::FromTokio;
 use embedded_tls::pki::CertVerifier;
-use embedded_tls::{Aes128GcmSha256, CryptoProvider, SignatureScheme, TlsError, TlsVerifier};
+use embedded_tls::{
+    Aes128GcmSha256, CryptoProvider, SignatureScheme, TlsError, TlsVerifier,
+    crypto_traits::AesGcmAead,
+};
 use hmac::Hmac;
 use p256::SecretKey;
-use p256::ecdsa::{DerSignature, SigningKey};
+use p256::ecdsa::{Signature, SigningKey};
 use rand_core::OsRng;
 use rustls::server::AllowAnyAnonymousOrAuthenticatedClient;
 use sha2::Sha256;
-use signature::SignerMut;
+use signature::Signer;
 use std::net::SocketAddr;
 use std::sync::Once;
 use std::time::SystemTime;
@@ -30,25 +33,20 @@ struct RustPkiProvider<'a> {
 
 impl CryptoProvider for RustPkiProvider<'_> {
     type CipherSuite = Aes128GcmSha256;
-    type Signature = DerSignature;
+    type Signature = Signature;
     type Hash = Sha256;
     type Hmac = Hmac<Sha256>;
-    type Aead = Aes128Gcm;
+    type Aead = AesGcmAead<Aes128Gcm>;
 
     fn rng(&mut self) -> impl embedded_tls::CryptoRngCore {
         &mut self.rng
     }
 
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, embedded_tls::TlsError> {
-        use aes_gcm::aead::KeyInit;
-        Self::Aead::new_from_slice(key).map_err(|_| embedded_tls::TlsError::CryptoError)
+        AesGcmAead::new(key)
     }
 
-    fn verifier(&mut self) -> Result<&mut impl TlsVerifier<Sha256>, TlsError> {
-        Ok(&mut self.verifier)
-    }
-
-    fn signer(&mut self) -> Result<(impl SignerMut<Self::Signature>, SignatureScheme), TlsError> {
+    fn signer(&mut self) -> Result<(impl Signer<Self::Signature>, SignatureScheme), TlsError> {
         let key_der = self.priv_key.ok_or(TlsError::InvalidPrivateKey)?;
         let secret_key =
             SecretKey::from_sec1_der(key_der).map_err(|_| TlsError::InvalidPrivateKey)?;

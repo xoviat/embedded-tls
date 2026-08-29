@@ -2,6 +2,7 @@ use aes_gcm::Aes128Gcm;
 use embedded_io::Write as _;
 use embedded_io_adapters::std::FromStd;
 use embedded_tls::blocking::*;
+use embedded_tls::crypto_traits::AesGcmAead;
 use embedded_tls::webpki::CertVerifier;
 use hmac::Hmac;
 use rand::rngs::OsRng;
@@ -16,23 +17,22 @@ struct Provider<'a> {
 
 impl CryptoProvider for Provider<'_> {
     type CipherSuite = Aes128GcmSha256;
-    type Signature = &'static [u8];
+    type Signature = p256::ecdsa::Signature;
     type Hash = Sha256;
     type Hmac = Hmac<Sha256>;
-    type Aead = Aes128Gcm;
+    type Aead = AesGcmAead<Aes128Gcm>;
 
     fn rng(&mut self) -> impl embedded_tls::CryptoRngCore {
         &mut self.rng
     }
 
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, embedded_tls::TlsError> {
-        use aes_gcm::aead::KeyInit;
-        Self::Aead::new_from_slice(key).map_err(|_| embedded_tls::TlsError::CryptoError)
+        AesGcmAead::new(key)
     }
 
     fn verifier(
         &mut self,
-    ) -> Result<&mut impl TlsVerifier<Self::Hash>, embedded_tls::TlsError> {
+    ) -> Result<&mut impl embedded_tls::TlsVerifier<Self::Hash>, embedded_tls::TlsError> {
         Ok(&mut self.verifier)
     }
 }

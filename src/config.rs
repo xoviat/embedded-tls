@@ -2,65 +2,53 @@ use core::marker::PhantomData;
 
 use crate::TlsError;
 use crate::cipher_suites::CipherSuite;
+use crate::crypto_traits::{AesGcmAead, TlsAead};
 use crate::extensions::extension_data::signature_algorithms::SignatureScheme;
 use crate::extensions::extension_data::supported_groups::NamedGroup;
 pub use crate::handshake::certificate::{CertificateEntryRef, CertificateRef};
 pub use crate::handshake::certificate_verify::CertificateVerifyRef;
-use aes_gcm::{AeadInPlace, Aes128Gcm, Aes256Gcm, KeyInit};
-use digest::core_api::BlockSizeUser;
-use digest::{Digest, FixedOutput, OutputSizeUser, Reset};
+use aes_gcm::{Aes128Gcm, Aes256Gcm};
+
+use digest::{Digest, FixedOutputReset, KeyInit, Mac, OutputSizeUser};
 use ecdsa::elliptic_curve::SecretKey;
-use generic_array::ArrayLength;
 use heapless::Vec;
 use hmac::Hmac;
 use p256::ecdsa::SigningKey;
 use rand_core::{CryptoRngCore, RngCore};
 pub use sha2::{Sha256, Sha384};
-use typenum::{Sum, U10, U12, U16, U32};
 
 pub use crate::extensions::extension_data::max_fragment_length::MaxFragmentLength;
 
 pub const TLS_RECORD_OVERHEAD: usize = 128;
 
-// longest label is 12b -> buf <= 2 + 1 + 6 + longest + 1 + hash_out = hash_out + 22
-type LongestLabel = U12;
-type LabelOverhead = U10;
-type LabelBuffer<CipherSuite> = Sum<
-    <<CipherSuite as TlsCipherSuite>::Hash as OutputSizeUser>::OutputSize,
-    Sum<LongestLabel, LabelOverhead>,
->;
-
-/// Represents a TLS 1.3 cipher suite
+/// Represents a TLS 1.3 cipher suite.
 pub trait TlsCipherSuite {
     const CODE_POINT: u16;
-    type Cipher: KeyInit<KeySize = Self::KeyLen> + AeadInPlace<NonceSize = Self::IvLen>;
-    type KeyLen: ArrayLength<u8>;
-    type IvLen: ArrayLength<u8>;
+    type Cipher: KeyInit;
+    type KeyArray: AsRef<[u8]> + AsMut<[u8]> + Default + Clone;
+    type IvArray: AsRef<[u8]> + AsMut<[u8]> + Default + Clone;
 
-    type Hash: Digest + Reset + Clone + OutputSizeUser + BlockSizeUser + FixedOutput;
-    type LabelBufferSize: ArrayLength<u8>;
+    type Hash: Digest + FixedOutputReset + Clone + OutputSizeUser;
 }
 
 pub struct Aes128GcmSha256;
 impl TlsCipherSuite for Aes128GcmSha256 {
     const CODE_POINT: u16 = CipherSuite::TlsAes128GcmSha256 as u16;
     type Cipher = Aes128Gcm;
-    type KeyLen = U16;
-    type IvLen = U12;
+    type KeyArray = [u8; 16];
+    type IvArray = [u8; 12];
 
     type Hash = Sha256;
-    type LabelBufferSize = LabelBuffer<Self>;
 }
 
 pub struct Aes256GcmSha384;
 impl TlsCipherSuite for Aes256GcmSha384 {
     const CODE_POINT: u16 = CipherSuite::TlsAes256GcmSha384 as u16;
     type Cipher = Aes256Gcm;
-    type KeyLen = U32;
-    type IvLen = U12;
+    type KeyArray = [u8; 32];
+    type IvArray = [u8; 12];
 
     type Hash = Sha384;
-    type LabelBufferSize = LabelBuffer<Self>;
 }
 
 /// A TLS 1.3 verifier.
@@ -70,7 +58,7 @@ impl TlsCipherSuite for Aes256GcmSha384 {
 /// and also to skip the verification if the server is verified through other means (I.e. a pre-shared key).
 pub trait TlsVerifier<Hash>
 where
-    Hash: crate::crypto_traits::TlsHash,
+    Hash: Digest + FixedOutputReset + Clone + OutputSizeUser,
 {
     /// Host verification is enabled by passing a server hostname.
     fn set_hostname_verification(&mut self, hostname: &str) -> Result<(), crate::TlsError>;
@@ -96,7 +84,7 @@ pub struct NoVerify;
 
 impl<Hash> TlsVerifier<Hash> for NoVerify
 where
-    Hash: crate::crypto_traits::TlsHash,
+    Hash: Digest + FixedOutputReset + Clone + OutputSizeUser,
 {
     fn set_hostname_verification(&mut self, _hostname: &str) -> Result<(), crate::TlsError> {
         Ok(())
@@ -147,16 +135,17 @@ impl TlsClock for NoClock {
 /// in hardware acceleration.
 pub trait CryptoProvider {
     type CipherSuite: TlsCipherSuite;
-    type Signature: AsRef<[u8]>;
+    type Signature: signature::SignatureEncoding;
 
     /// Hardware-abstracted hash for transcript and key schedule.
-    type Hash: crate::crypto_traits::TlsHash;
+    type Hash: Digest + FixedOutputReset + Clone + OutputSizeUser;
     /// Hardware-abstracted HMAC for HKDF.
-    type Hmac: crate::crypto_traits::TlsHmac<
-            OutputSize = <Self::Hash as crate::crypto_traits::TlsHash>::OutputSize,
-        >;
+    type Hmac: Mac
+        + KeyInit
+        + Clone
+        + OutputSizeUser<OutputSize = <Self::Hash as OutputSizeUser>::OutputSize>;
     /// Hardware-abstracted AEAD for record encryption.
-    type Aead: crate::crypto_traits::TlsAead;
+    type Aead: TlsAead;
 
     fn rng(&mut self) -> impl CryptoRngCore;
 
@@ -216,12 +205,12 @@ pub trait CryptoProvider {
     ) -> Result<(), crate::TlsError> {
         match group {
             NamedGroup::Secp256r1 => {
-                use p256::elliptic_curve::sec1::ToEncodedPoint;
+                use p256::elliptic_curve::sec1::ToSec1Point;
                 loop {
                     self.rng().fill_bytes(secret_key);
                     if let Ok(secret) = p256::SecretKey::from_slice(secret_key) {
                         let pk = p256::PublicKey::from_secret_scalar(&secret.to_nonzero_scalar());
-                        let point = pk.to_encoded_point(false);
+                        let point = pk.to_sec1_point(false);
                         public_key[..32].copy_from_slice(
                             point
                                 .x()
@@ -241,13 +230,13 @@ pub trait CryptoProvider {
             NamedGroup::Secp384r1 => {
                 #[cfg(feature = "p384")]
                 {
-                    use p384::elliptic_curve::sec1::ToEncodedPoint;
+                    use p384::elliptic_curve::sec1::ToSec1Point;
                     loop {
                         self.rng().fill_bytes(secret_key);
                         if let Ok(secret) = p384::SecretKey::from_slice(secret_key) {
                             let pk =
                                 p384::PublicKey::from_secret_scalar(&secret.to_nonzero_scalar());
-                            let point = pk.to_encoded_point(false);
+                            let point = pk.to_sec1_point(false);
                             public_key[..48].copy_from_slice(
                                 point
                                     .x()
@@ -272,28 +261,25 @@ pub trait CryptoProvider {
     }
 
     fn verifier(&mut self) -> Result<&mut impl TlsVerifier<Self::Hash>, crate::TlsError> {
-        Err::<&mut NoVerify, _>(crate::TlsError::Unimplemented)
+        Err::<&mut NoVerify, _>(crate::TlsError::InvalidCertificate)
     }
 
     /// Provide a signing key for client certificate authentication.
     ///
-    /// The provider resolves the private key internally (e.g. from memory, flash, or a hardware
-    /// crypto module such as an HSM/TPM/secure element).
+    /// The provider resolves the private key internally, for example from memory, flash,
+    /// or a hardware crypto module such as an HSM, TPM, or secure element.
     fn signer(
         &mut self,
-    ) -> Result<(impl signature::SignerMut<Self::Signature>, SignatureScheme), crate::TlsError>
-    {
-        Err::<(NoSign, _), crate::TlsError>(crate::TlsError::Unimplemented)
+    ) -> Result<(impl signature::Signer<Self::Signature>, SignatureScheme), crate::TlsError> {
+        Err::<(NoSign, SignatureScheme), _>(crate::TlsError::InvalidPrivateKey)
     }
 
     /// Resolve the client certificate for mutual TLS authentication.
     ///
-    /// Return `None` if no client certificate is available (an empty certificate message will
-    /// be sent to the server). The data type `D` can be borrowed (`&[u8]`) or owned
-    /// (e.g. `heapless::Vec<u8, N>`) — the certificate is only needed long enough to encode
-    /// into the TLS message.
+    /// Return `None` if no client certificate is available. The data only needs to remain
+    /// valid long enough to encode the certificate into the TLS message.
     fn client_cert(&mut self) -> Option<Certificate<impl AsRef<[u8]>>> {
-        None::<Certificate<&[u8]>>
+        None::<Certificate<&'static [u8]>>
     }
 }
 
@@ -337,8 +323,7 @@ impl<T: CryptoProvider> CryptoProvider for &mut T {
 
     fn signer(
         &mut self,
-    ) -> Result<(impl signature::SignerMut<Self::Signature>, SignatureScheme), crate::TlsError>
-    {
+    ) -> Result<(impl signature::Signer<Self::Signature>, SignatureScheme), crate::TlsError> {
         T::signer(self)
     }
 
@@ -349,8 +334,15 @@ impl<T: CryptoProvider> CryptoProvider for &mut T {
 
 pub struct NoSign;
 
-impl<S> signature::Signer<S> for NoSign {
+impl<S> signature::Signer<S> for NoSign
+where
+    S: signature::SignatureEncoding + for<'a> TryFrom<&'a [u8]>,
+{
     fn try_sign(&self, _msg: &[u8]) -> Result<S, signature::Error> {
+        unimplemented!()
+    }
+
+    fn sign(&self, _msg: &[u8]) -> S {
         unimplemented!()
     }
 }
@@ -389,23 +381,26 @@ impl<'a, CipherSuite: TlsCipherSuite, RNG: CryptoRngCore> UnsecureProvider<'a, C
 
 impl<RNG: CryptoRngCore> CryptoProvider for UnsecureProvider<'_, Aes128GcmSha256, RNG> {
     type CipherSuite = Aes128GcmSha256;
-    type Signature = p256::ecdsa::DerSignature;
+    type Signature = p256::ecdsa::Signature;
     type Hash = Sha256;
     type Hmac = Hmac<Sha256>;
-    type Aead = Aes128Gcm;
+    type Aead = AesGcmAead<Aes128Gcm>;
 
     fn rng(&mut self) -> impl CryptoRngCore {
         &mut self.rng
     }
 
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, crate::TlsError> {
-        KeyInit::new_from_slice(key).map_err(|_| crate::TlsError::CryptoError)
+        AesGcmAead::new(key)
+    }
+
+    fn verifier(&mut self) -> Result<&mut impl TlsVerifier<Self::Hash>, crate::TlsError> {
+        Err::<&mut NoVerify, _>(crate::TlsError::InvalidCertificate)
     }
 
     fn signer(
         &mut self,
-    ) -> Result<(impl signature::SignerMut<Self::Signature>, SignatureScheme), crate::TlsError>
-    {
+    ) -> Result<(impl signature::Signer<Self::Signature>, SignatureScheme), crate::TlsError> {
         let key_der = self.priv_key.ok_or(TlsError::InvalidPrivateKey)?;
         let secret_key =
             SecretKey::from_sec1_der(key_der).map_err(|_| TlsError::InvalidPrivateKey)?;
@@ -423,23 +418,26 @@ impl<RNG: CryptoRngCore> CryptoProvider for UnsecureProvider<'_, Aes128GcmSha256
 
 impl<RNG: CryptoRngCore> CryptoProvider for UnsecureProvider<'_, Aes256GcmSha384, RNG> {
     type CipherSuite = Aes256GcmSha384;
-    type Signature = p256::ecdsa::DerSignature;
+    type Signature = p256::ecdsa::Signature;
     type Hash = Sha384;
     type Hmac = Hmac<Sha384>;
-    type Aead = Aes256Gcm;
+    type Aead = AesGcmAead<Aes256Gcm>;
 
     fn rng(&mut self) -> impl CryptoRngCore {
         &mut self.rng
     }
 
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, crate::TlsError> {
-        KeyInit::new_from_slice(key).map_err(|_| crate::TlsError::CryptoError)
+        AesGcmAead::new(key)
+    }
+
+    fn verifier(&mut self) -> Result<&mut impl TlsVerifier<Self::Hash>, crate::TlsError> {
+        Err::<&mut NoVerify, _>(crate::TlsError::InvalidCertificate)
     }
 
     fn signer(
         &mut self,
-    ) -> Result<(impl signature::SignerMut<Self::Signature>, SignatureScheme), crate::TlsError>
-    {
+    ) -> Result<(impl signature::Signer<Self::Signature>, SignatureScheme), crate::TlsError> {
         let key_der = self.priv_key.ok_or(TlsError::InvalidPrivateKey)?;
         let secret_key =
             SecretKey::from_sec1_der(key_der).map_err(|_| TlsError::InvalidPrivateKey)?;
@@ -569,7 +567,7 @@ impl<'a> TlsConfig<'a> {
     /// writes. Note that the buffers need to include some overhead over the configured fragment
     /// length.
     ///
-    /// From [RFC 6066, Section 4.  Maximum Fragment Length Negotiation](https://www.rfc-editor.org/rfc/rfc6066#page=8):
+    /// From [RFC 6066, Section 4.  Maximum Fragment Length Negotiation](https://www.rfc-editor.org/rfc/rfc6066#page-8):
     ///
     /// > Without this extension, TLS specifies a fixed maximum plaintext
     /// > fragment length of 2^14 bytes.  It may be desirable for constrained

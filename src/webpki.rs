@@ -1,6 +1,6 @@
 use crate::TlsError;
 use crate::config::{Certificate, TlsClock, TlsVerifier};
-use crate::crypto_traits::TlsHash;
+use digest::Digest;
 use crate::extensions::extension_data::signature_algorithms::SignatureScheme;
 use crate::handshake::{
     certificate::{
@@ -121,7 +121,7 @@ static ALL_SIGALGS: &[&webpki::SignatureAlgorithm] = &[
 pub struct CertVerifier<'a, Hash, Clock, const CERT_SIZE: usize>
 where
     Clock: TlsClock,
-    Hash: TlsHash,
+    Hash: Digest + Clone + digest::FixedOutputReset + digest::OutputSizeUser,
 {
     ca: Certificate<&'a [u8]>,
     host: Option<heapless::String<64>>,
@@ -133,7 +133,7 @@ where
 impl<'a, Hash, Clock, const CERT_SIZE: usize> CertVerifier<'a, Hash, Clock, CERT_SIZE>
 where
     Clock: TlsClock,
-    Hash: TlsHash,
+    Hash: Digest + Clone + digest::FixedOutputReset + digest::OutputSizeUser,
 {
     #[must_use]
     pub fn new(ca: Certificate<&'a [u8]>) -> Self {
@@ -150,7 +150,7 @@ where
 impl<Hash, Clock, const CERT_SIZE: usize> TlsVerifier<Hash>
     for CertVerifier<'_, Hash, Clock, CERT_SIZE>
 where
-    Hash: TlsHash,
+    Hash: Digest + Clone + digest::FixedOutputReset + digest::OutputSizeUser,
     Clock: TlsClock,
 {
     fn set_hostname_verification(&mut self, hostname: &str) -> Result<(), TlsError> {
@@ -179,9 +179,9 @@ where
         msg.resize(64, 0x20).map_err(|_| TlsError::EncodeError)?;
         msg.extend_from_slice(ctx_str)
             .map_err(|_| TlsError::EncodeError)?;
-        let mut hash_out = generic_array::GenericArray::default();
+        let mut hash_out = Default::default();
         let cloned = handshake_hash.clone();
-        cloned.finalize_into(&mut hash_out);
+        Digest::finalize_into(cloned, &mut hash_out);
         msg.extend_from_slice(&hash_out)
             .map_err(|_| TlsError::EncodeError)?;
 

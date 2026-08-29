@@ -3,14 +3,15 @@ use aes_gcm::Aes128Gcm;
 use digest::FixedOutputReset;
 use embedded_io_adapters::tokio_1::FromTokio;
 use embedded_tls::pki::CertVerifier;
-use embedded_tls::{Aes128GcmSha256, CryptoProvider, SignatureScheme, TlsError, TlsVerifier};
+use embedded_tls::{
+    crypto_traits::AesGcmAead,Aes128GcmSha256, CryptoProvider, SignatureScheme, TlsError, TlsVerifier};
 use hmac::Hmac;
 use rand_core::{CryptoRngCore, OsRng};
 use rsa::pkcs8::DecodePrivateKey;
 use rustls::server::AllowAnyAnonymousOrAuthenticatedClient;
 use sha2::{Digest, Sha256};
 use signature::RandomizedSigner;
-use signature::SignerMut;
+use signature::Signer;
 use std::net::SocketAddr;
 use std::sync::Once;
 use std::time::SystemTime;
@@ -26,7 +27,7 @@ struct RsaPssSigningKey<D: Digest, R: CryptoRngCore> {
     key: rsa::pss::SigningKey<D>,
 }
 
-impl<D: Digest + FixedOutputReset, R: CryptoRngCore> SignerMut<Box<[u8]>>
+impl<D: Digest + FixedOutputReset, R: CryptoRngCore> Signer<Box<[u8]>>
     for RsaPssSigningKey<D, R>
 {
     fn try_sign(&mut self, msg: &[u8]) -> Result<Box<[u8]>, rsa::signature::Error> {
@@ -47,22 +48,18 @@ impl CryptoProvider for RustPkiProvider<'_> {
     type Signature = Box<[u8]>;
     type Hash = Sha256;
     type Hmac = Hmac<Sha256>;
-    type Aead = Aes128Gcm;
+    type Aead = AesGcmAead<Aes128Gcm>;
 
     fn rng(&mut self) -> impl embedded_tls::CryptoRngCore {
         &mut self.rng
     }
 
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, embedded_tls::TlsError> {
-        use aes_gcm::aead::KeyInit;
-        Self::Aead::new_from_slice(key).map_err(|_| embedded_tls::TlsError::CryptoError)
+        AesGcmAead::new(key)
     }
 
-    fn verifier(&mut self) -> Result<&mut impl TlsVerifier<Sha256>, TlsError> {
-        Ok(&mut self.verifier)
-    }
 
-    fn signer(&mut self) -> Result<(impl SignerMut<Self::Signature>, SignatureScheme), TlsError> {
+    fn signer(&mut self) -> Result<(impl Signer<Self::Signature>, SignatureScheme), TlsError> {
         let key_der = self.priv_key.ok_or(TlsError::InvalidPrivateKey)?;
         let private_key =
             rsa::RsaPrivateKey::from_pkcs8_der(key_der).map_err(|_| TlsError::InvalidPrivateKey)?;
