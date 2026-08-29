@@ -1,7 +1,6 @@
 //use p256::elliptic_curve::AffinePoint;
 use crate::CertificateVerify;
 use crate::TlsError;
-use digest::Digest;
 use crate::handshake::certificate::CertificateRef;
 use crate::handshake::certificate_request::CertificateRequestRef;
 use crate::handshake::certificate_verify::CertificateVerifyRef;
@@ -13,6 +12,7 @@ use crate::handshake::server_hello::ServerHello;
 use crate::parse_buffer::{ParseBuffer, ParseError};
 use crate::{CryptoProvider, buffer::CryptoBuffer, key_schedule::WriteKeySchedule};
 use core::fmt::{Debug, Formatter};
+use digest::Digest;
 
 pub mod binder;
 pub mod certificate;

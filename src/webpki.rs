@@ -1,6 +1,5 @@
 use crate::TlsError;
 use crate::config::{Certificate, TlsClock, TlsVerifier};
-use digest::Digest;
 use crate::extensions::extension_data::signature_algorithms::SignatureScheme;
 use crate::handshake::{
     certificate::{
@@ -9,6 +8,7 @@ use crate::handshake::{
     certificate_verify::CertificateVerifyRef,
 };
 use core::marker::PhantomData;
+use digest::Digest;
 use heapless::Vec;
 #[cfg(all(not(feature = "alloc"), feature = "webpki"))]
 impl TryInto<&'static webpki::SignatureAlgorithm> for SignatureScheme {

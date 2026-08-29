@@ -1,5 +1,5 @@
 use crate::TlsError;
-use digest::{Mac, KeyInit, Output, OutputSizeUser};
+use digest::{KeyInit, Mac, Output, OutputSizeUser};
 use typenum::Unsigned;
 
 /// HKDF-Extract: PRK = HMAC-Hash(salt, IKM)

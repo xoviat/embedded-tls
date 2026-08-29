@@ -1,5 +1,5 @@
-use crate::buffer::CryptoBuffer;
 use crate::TlsError;
+use crate::buffer::CryptoBuffer;
 use digest::{Output, OutputSizeUser};
 
 #[derive(Clone)]

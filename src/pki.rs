@@ -1,6 +1,5 @@
 use crate::TlsError;
 use crate::config::{Certificate, TlsClock, TlsVerifier};
-use digest::Digest;
 #[cfg(feature = "p384")]
 use crate::der_certificate::ECDSA_SHA384;
 #[cfg(feature = "ed25519")]
@@ -23,6 +22,7 @@ use core::marker::PhantomData;
 #[cfg(feature = "defmt")]
 use defmt::Debug2Format;
 use der::Decode;
+use digest::Digest;
 use heapless::Vec;
 
 pub struct CertificateNames {

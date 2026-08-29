@@ -1,13 +1,12 @@
-use rand_core::RngCore;
 use core::marker::PhantomData;
+use rand_core::RngCore;
 
 use digest::OutputSizeUser;
-use typenum::Unsigned;
 use heapless::Vec;
+use typenum::Unsigned;
 
 use crate::buffer::CryptoBuffer;
 use crate::config::{TlsCipherSuite, TlsConfig};
-use digest::Digest;
 use crate::extensions::extension_data::alpn::AlpnProtocolNameList;
 use crate::extensions::extension_data::key_share::{KeyShareClientHello, KeyShareEntry};
 use crate::extensions::extension_data::pre_shared_key::PreSharedKeyClientHello;
@@ -22,6 +21,7 @@ use crate::extensions::messages::ClientHelloExtension;
 use crate::handshake::{LEGACY_VERSION, Random};
 use crate::key_schedule::WriteKeySchedule;
 use crate::{CryptoProvider, TlsError};
+use digest::Digest;
 
 #[derive(Debug)]
 pub struct ClientHello<'config, CipherSuite>
@@ -176,7 +176,8 @@ where
         // This causes a few issues since lengths must be correctly inside the payload,
         // but won't actually be added to the record buffer until the end.
         if let Some((_, identities)) = &self.config.psk {
-            let binders_len = identities.len() * (1 + <CipherSuite::Hash as OutputSizeUser>::OutputSize::USIZE);
+            let binders_len =
+                identities.len() * (1 + <CipherSuite::Hash as OutputSizeUser>::OutputSize::USIZE);
 
             let binders_pos = enc_buf.len() - binders_len;
 

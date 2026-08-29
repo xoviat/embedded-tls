@@ -3,8 +3,7 @@
 use aes_gcm::Aes128Gcm;
 use embedded_io_adapters::tokio_1::FromTokio;
 use embedded_tls::webpki::CertVerifier;
-use embedded_tls::{
-    crypto_traits::AesGcmAead,Aes128GcmSha256, CryptoProvider, TlsVerifier};
+use embedded_tls::{Aes128GcmSha256, CryptoProvider, TlsVerifier, crypto_traits::AesGcmAead};
 use hmac::Hmac;
 use sha2::Sha256;
 use std::net::SocketAddr;
@@ -34,7 +33,6 @@ impl CryptoProvider for WebPkiProvider<'_> {
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, embedded_tls::TlsError> {
         AesGcmAead::new(key)
     }
-
 }
 
 fn init_log() {

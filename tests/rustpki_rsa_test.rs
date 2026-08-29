@@ -4,7 +4,9 @@ use digest::FixedOutputReset;
 use embedded_io_adapters::tokio_1::FromTokio;
 use embedded_tls::pki::CertVerifier;
 use embedded_tls::{
-    crypto_traits::AesGcmAead,Aes128GcmSha256, CryptoProvider, SignatureScheme, TlsError, TlsVerifier};
+    Aes128GcmSha256, CryptoProvider, SignatureScheme, TlsError, TlsVerifier,
+    crypto_traits::AesGcmAead,
+};
 use hmac::Hmac;
 use rand_core::{CryptoRngCore, OsRng};
 use rsa::pkcs8::DecodePrivateKey;
@@ -27,9 +29,7 @@ struct RsaPssSigningKey<D: Digest, R: CryptoRngCore> {
     key: rsa::pss::SigningKey<D>,
 }
 
-impl<D: Digest + FixedOutputReset, R: CryptoRngCore> Signer<Box<[u8]>>
-    for RsaPssSigningKey<D, R>
-{
+impl<D: Digest + FixedOutputReset, R: CryptoRngCore> Signer<Box<[u8]>> for RsaPssSigningKey<D, R> {
     fn try_sign(&mut self, msg: &[u8]) -> Result<Box<[u8]>, rsa::signature::Error> {
         let signature = self.key.try_sign_with_rng(&mut self.rng, msg)?;
         Ok(signature.into())
@@ -57,7 +57,6 @@ impl CryptoProvider for RustPkiProvider<'_> {
     fn aead(&mut self, key: &[u8]) -> Result<Self::Aead, embedded_tls::TlsError> {
         AesGcmAead::new(key)
     }
-
 
     fn signer(&mut self) -> Result<(impl Signer<Self::Signature>, SignatureScheme), TlsError> {
         let key_der = self.priv_key.ok_or(TlsError::InvalidPrivateKey)?;

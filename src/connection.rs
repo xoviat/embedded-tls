@@ -1,7 +1,5 @@
 use crate::config::TlsConfig;
 use crate::crypto_traits::TlsAead;
-use signature::SignatureEncoding;
-use digest::Digest;
 use crate::handshake::{ClientHandshake, ServerHandshake};
 use crate::key_schedule::{KeySchedule, ReadKeySchedule, WriteKeySchedule};
 use crate::record::{ClientRecord, ServerRecord};
@@ -13,9 +11,11 @@ use crate::{
     handshake::{certificate::CertificateRef, certificate_request::CertificateRequest},
 };
 use core::fmt::Debug;
+use digest::Digest;
 use embedded_io::Error as _;
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};
 use embedded_io_async::{Read as AsyncRead, Write as AsyncWrite};
+use signature::SignatureEncoding;
 
 use crate::application_data::ApplicationData;
 use crate::buffer::CryptoBuffer;
@@ -130,8 +130,13 @@ where
 
     let aead = key_schedule.get_aead().map_err(|_| TlsError::CryptoError)?;
     let mut tag = [0u8; TAG_SIZE];
-    aead.encrypt_in_place(nonce.as_ref(), &additional_data, buf.as_mut_slice(), &mut tag)
-        .map_err(|_| TlsError::InvalidApplicationData)?;
+    aead.encrypt_in_place(
+        nonce.as_ref(),
+        &additional_data,
+        buf.as_mut_slice(),
+        &mut tag,
+    )
+    .map_err(|_| TlsError::InvalidApplicationData)?;
     buf.extend_from_slice(&tag)
         .map_err(|_| TlsError::InsufficientSpace)?;
     Ok(())

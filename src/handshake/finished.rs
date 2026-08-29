@@ -1,6 +1,6 @@
-use digest::{Output, OutputSizeUser};
-use crate::parse_buffer::ParseBuffer;
 use crate::TlsError;
+use crate::parse_buffer::ParseBuffer;
+use digest::{Output, OutputSizeUser};
 
 #[derive(Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -12,7 +12,12 @@ pub struct Finished<Hash: OutputSizeUser> {
 #[cfg(feature = "defmt")]
 impl<Hash: OutputSizeUser> defmt::Format for Finished<Hash> {
     fn format(&self, fmt: defmt::Formatter) {
-        defmt::write!(fmt, "Finished {{ verify: {:x?}, hash: {:?} }}", self.verify.as_slice(), self.hash.as_ref().map(|h| h.as_slice()))
+        defmt::write!(
+            fmt,
+            "Finished {{ verify: {:x?}, hash: {:?} }}",
+            self.verify.as_slice(),
+            self.hash.as_ref().map(|h| h.as_slice())
+        )
     }
 }
 

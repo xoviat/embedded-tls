@@ -1,8 +1,8 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 use crate::TlsError;
-use aead::{AeadInOut, KeyInit, Nonce, Tag};
 use aead::inout::InOutBuf;
+use aead::{AeadInOut, KeyInit, Nonce, Tag};
 
 /// Hardware-abstracted AEAD for record encryption.
 ///
@@ -30,12 +30,14 @@ pub struct AesGcmAead<C>(C);
 impl<C: AeadInOut + KeyInit> AesGcmAead<C> {
     pub fn new(key: &[u8]) -> Result<Self, crate::TlsError> {
         eprintln!("[DIAG] AesGcmAead::new called with key len={}", key.len());
-        C::new_from_slice(key)
-            .map(Self)
-            .map_err(|e| {
-                eprintln!("[DIAG] AesGcmAead::new failed: key len={}, error={:?}", key.len(), e);
-                crate::TlsError::CryptoError
-            })
+        C::new_from_slice(key).map(Self).map_err(|e| {
+            eprintln!(
+                "[DIAG] AesGcmAead::new failed: key len={}, error={:?}",
+                key.len(),
+                e
+            );
+            crate::TlsError::CryptoError
+        })
     }
 }
 
@@ -47,13 +49,23 @@ impl<C: AeadInOut + KeyInit> TlsAead for AesGcmAead<C> {
         buffer: &mut [u8],
         tag: &mut [u8],
     ) -> Result<(), TlsError> {
-        eprintln!("[DIAG] encrypt_in_place: nonce_len={}, buf_len={}, tag_len={}", nonce.len(), buffer.len(), tag.len());
+        eprintln!(
+            "[DIAG] encrypt_in_place: nonce_len={}, buf_len={}, tag_len={}",
+            nonce.len(),
+            buffer.len(),
+            tag.len()
+        );
         let nonce_arr = &Nonce::<C>::try_from(nonce).map_err(|e| {
-            eprintln!("[DIAG] encrypt nonce conversion failed: nonce_len={}, err={:?}", nonce.len(), e);
+            eprintln!(
+                "[DIAG] encrypt nonce conversion failed: nonce_len={}, err={:?}",
+                nonce.len(),
+                e
+            );
             TlsError::CryptoError
         })?;
         let buf = InOutBuf::from(buffer);
-        let computed = self.0
+        let computed = self
+            .0
             .encrypt_inout_detached(nonce_arr, aad, buf)
             .map_err(|e| {
                 eprintln!("[DIAG] encrypt_inout_detached failed: err={:?}", e);
@@ -70,13 +82,26 @@ impl<C: AeadInOut + KeyInit> TlsAead for AesGcmAead<C> {
         buffer: &mut [u8],
         tag: &[u8],
     ) -> Result<(), TlsError> {
-        eprintln!("[DIAG] decrypt_in_place: nonce_len={}, buf_len={}, tag_len={}", nonce.len(), buffer.len(), tag.len());
+        eprintln!(
+            "[DIAG] decrypt_in_place: nonce_len={}, buf_len={}, tag_len={}",
+            nonce.len(),
+            buffer.len(),
+            tag.len()
+        );
         let nonce_arr = &Nonce::<C>::try_from(nonce).map_err(|e| {
-            eprintln!("[DIAG] decrypt nonce conversion failed: nonce_len={}, err={:?}", nonce.len(), e);
+            eprintln!(
+                "[DIAG] decrypt nonce conversion failed: nonce_len={}, err={:?}",
+                nonce.len(),
+                e
+            );
             TlsError::CryptoError
         })?;
         let tag_arr = &Tag::<C>::try_from(tag).map_err(|e| {
-            eprintln!("[DIAG] decrypt tag conversion failed: tag_len={}, err={:?}", tag.len(), e);
+            eprintln!(
+                "[DIAG] decrypt tag conversion failed: tag_len={}, err={:?}",
+                tag.len(),
+                e
+            );
             TlsError::CryptoError
         })?;
         let buf = InOutBuf::from(buffer);
